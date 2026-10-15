@@ -1,0 +1,15 @@
+dependencies {
+    modImplementation files(new File(rootProject.frameworkDir, 'server/build/libs/kizuna-inventory-ui-framework-server-0.1.0-SNAPSHOT.jar'))
+    modImplementation files(new File(rootProject.bs3dDir, 'server/build/libs/backpack-storage-3d-server-0.1.0-SNAPSHOT.jar'))
+    testImplementation 'net.fabricmc:fabric-loader-junit:0.16.10'
+}
+test { systemProperty 'fabric.side', 'server' }
+loom.runs {
+    smoke {
+        server()
+        source sourceSets.smoke
+        runDir "../build/smoke/${rootProject.findProperty('smokeRun') ?: 'manual'}/server"
+        property 'vanilla.smoke.mode', 'dedicated'
+        programArg 'nogui'
+    }
+}

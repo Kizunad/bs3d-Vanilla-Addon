@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "bs3d_vanilla_addon",
+  "version": "${version}",
+  "name": "BS3D Vanilla Addon",
+  "environment": "client",
+  "authors": [
+    "Kizunad"
+  ],
+  "license": "MIT",
+  "entrypoints": {
+    "main": [
+      "dev.kizuna.bs3d.vanilla.server.VanillaServer"
+    ],
+    "kizuna_inventory_ui_server": [
+      "dev.kizuna.bs3d.vanilla.server.VanillaServer"
+    ],
+    "kizuna_inventory_ui": [
+      "dev.kizuna.bs3d.vanilla.client.VanillaClient"
+    ]
+  },
+  "depends": {
+    "java": ">=17",
+    "minecraft": "1.20.1",
+    "fabricloader": ">=0.16.10",
+    "fabric-api": ">=0.92.3+1.20.1",
+    "backpack_storage_3d": "0.1.0-SNAPSHOT",
+    "kizuna_inventory_ui": "0.1.0-SNAPSHOT"
+  },
+  "mixins": [
+    "bs3d.vanilla.mixins.json",
+    "bs3d.vanilla.client.mixins.json"
+  ]
+}

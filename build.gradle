@@ -1,0 +1,86 @@
+plugins {
+    id 'base'
+    id 'fabric-loom' version '1.6-SNAPSHOT' apply false
+    id 'com.google.protobuf' version '0.9.6' apply false
+}
+
+ext {
+    frameworkDir = file(findProperty('frameworkDir') ?: '../Kizuna-Inventory-UI-Framework')
+    bs3dDir = file(findProperty('bs3dDir') ?: '../backpack-and-storage-3D')
+    protobufVersion = '4.36.2'
+}
+
+subprojects {
+    apply plugin: 'fabric-loom'
+    apply plugin: 'com.google.protobuf'
+    group = 'dev.kizuna.bs3d.vanilla'
+    version = '0.1.0-SNAPSHOT'
+    base.archivesName = "bs3d-vanilla-addon-${project.name}"
+    repositories {
+        maven { url = 'https://maven.fabricmc.net/' }
+        maven { url = 'https://maven.wispforest.io/releases' }
+        mavenCentral()
+    }
+    java {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        withSourcesJar()
+    }
+    tasks.withType(JavaCompile).configureEach {
+        options.release = 17
+        options.encoding = 'UTF-8'
+    }
+    dependencies {
+        minecraft 'com.mojang:minecraft:1.20.1'
+        mappings 'net.fabricmc:yarn:1.20.1+build.10:v2'
+        modImplementation 'net.fabricmc:fabric-loader:0.16.10'
+        modImplementation 'net.fabricmc.fabric-api:fabric-api:0.92.3+1.20.1'
+        implementation "com.google.protobuf:protobuf-java:${rootProject.protobufVersion}"
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+    sourceSets.main {
+        java.srcDir rootProject.file('shared/src/main/java')
+        resources.srcDir rootProject.file('common/src/main/resources')
+        proto.srcDir rootProject.file('shared/src/main/proto')
+    }
+    sourceSets.create('smoke') {
+        java.srcDir rootProject.file('smoke/src/main/java')
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+    protobuf {
+        protoc { artifact = "com.google.protobuf:protoc:${rootProject.protobufVersion}" }
+        generateProtoTasks {
+            ofSourceSet('main').configureEach { task ->
+                task.generateDescriptorSet = true
+                task.descriptorSetOptions.path = layout.buildDirectory.file('descriptors/vanilla-v1.desc').get().asFile.path
+                task.descriptorSetOptions.includeImports = true
+            }
+        }
+    }
+    test { useJUnitPlatform() }
+    processResources {
+        inputs.property 'version', project.version
+        filesMatching('fabric.mod.json') { expand version: project.version }
+    }
+    jar { from rootProject.file('LICENSE') }
+    loom {
+        mods {
+            'bs3d_vanilla_addon' { sourceSet sourceSets.main }
+            'bs3d_vanilla_smoke' { sourceSet sourceSets.smoke }
+        }
+    }
+}
+
+tasks.register('protocolZip', Zip) {
+    dependsOn ':server:generateProto'
+    archiveFileName = 'bs3d-vanilla-addon-0.1.0-SNAPSHOT-proto.zip'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from('shared/src/main/proto')
+    from(new File(frameworkDir, 'src/main/proto'))
+    from(project(':server').layout.buildDirectory.file('descriptors/vanilla-v1.desc')) { into 'descriptors' }
+    from('LICENSE')
+}
+tasks.named('build') { dependsOn ':client:build', ':server:build', 'protocolZip' }
+tasks.named('check') { dependsOn ':client:check', ':server:check' }

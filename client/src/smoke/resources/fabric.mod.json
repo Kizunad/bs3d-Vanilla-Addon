@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "bs3d_vanilla_smoke",
+  "version": "1.0.0",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      "dev.kizuna.bs3d.vanilla.smoke.VanillaFixture"
+    ],
+    "client": [
+      "dev.kizuna.bs3d.vanilla.smoke.VanillaSmokeClient"
+    ]
+  }
+}

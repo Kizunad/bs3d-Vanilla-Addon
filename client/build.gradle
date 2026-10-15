@@ -1,0 +1,25 @@
+// 单机内置服务器复用 server 的权威实现，客户端界面只消费服务器快照。
+sourceSets.main.java.srcDir rootProject.file('server/src/main/java')
+
+dependencies {
+    modImplementation files(new File(rootProject.frameworkDir, 'build/libs/kizuna-inventory-ui-framework-0.1.0-SNAPSHOT.jar'))
+    modImplementation files(new File(rootProject.bs3dDir, 'client/build/libs/backpack-storage-3d-client-0.1.0-SNAPSHOT.jar'))
+    modImplementation 'io.wispforest:owo-lib:0.11.2+1.20'
+    // 本地 runSmoke 使用 BS3D 的源码编译依赖解析；生产端仍由 BS3D JAR 内嵌。
+    implementation 'org.tomlj:tomlj:1.1.1'
+    implementation 'org.antlr:antlr4-runtime:4.11.1'
+}
+loom.runs {
+    smoke {
+        client()
+        source sourceSets.smoke
+        runDir "../build/smoke/${rootProject.findProperty('smokeRun') ?: 'manual'}/client"
+        property 'vanilla.smoke.mode', rootProject.findProperty('smokeMode') ?: 'dedicated'
+        property 'vanilla.smoke.address', "127.0.0.1:${rootProject.findProperty('smokePort') ?: '25584'}"
+        programArgs '--username', 'VanillaSmoke', '--width', '1280', '--height', '720'
+    }
+}
+
+processResources {
+    from(rootProject.file('server/src/main/resources')) { exclude 'fabric.mod.json' }
+}

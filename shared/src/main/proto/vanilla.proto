@@ -1,0 +1,49 @@
+syntax = "proto3";
+package kizuna.bs3d.vanilla.v1;
+option java_package = "dev.kizuna.bs3d.vanilla.protocol.pb";
+option java_outer_classname = "VanillaProtocol";
+
+// C2S：订阅当前连接自己的原版页面。没有选择其他玩家或远程方块的入口。
+message SubscribeRequest {}
+message ActionRequest {
+  string menu = 1; // 服务端每次打开页面生成的新 UUID，不等同于可循环复用的 sync_id。
+  string operation = 2; // 本连接内幂等 UUID；相同操作号不得更换参数。
+  int32 sync_id = 3;
+  int64 inventory_revision = 4; // BS3D 修订号，只用于背包交换。
+  bytes cursor_fingerprint = 5; // 对当前原版光标栈 NBT 的 SHA-256，不接受客户端物品 NBT。
+  oneof action {
+    string take_item = 6; // 随身背包中的物品实例 UUID；取到原版光标栈。
+    BagDestination store_cursor = 7;
+    PlayerSlot player_slot = 8;
+    string cancel_operation = 9;
+  }
+}
+message BagDestination {
+  string container = 1; // 随身容器实例 UUID，不是物品类型 ID。
+  int32 x = 2;
+  int32 y = 3; // 从底部向上的格坐标。
+  int32 z = 4;
+  uint32 orientation = 5; // BS3D OrthogonalRotation 的 0..23 索引。
+}
+message PlayerSlot {
+  int32 slot = 1; // PlayerInventory 槽号；只允许当前主手、副手和盔甲。
+  bytes fingerprint = 2;
+}
+enum Status {
+  CLOSED = 0;
+  READY = 1;
+  RUNNING = 2;
+  COMPLETED = 3;
+  REJECTED = 4;
+  CANCELLED = 5;
+}
+// S2C：只描述附属会话及进度。原版槽位、光标、燃烧进度仍走原版同步。
+message MenuState {
+  string menu = 1;
+  int32 sync_id = 2;
+  string operation = 3;
+  Status status = 4;
+  int32 elapsed_ticks = 5;
+  int32 duration_ticks = 6;
+  string detail = 7;
+}
