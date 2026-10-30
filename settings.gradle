@@ -12,6 +12,6 @@ rootProject.name = 'bs3d-vanilla-addon'
 include 'client', 'server'
 
 // Inventory UI Framework 与 BS3D 尚无发布坐标；按清单目录组合其独立仓库，相关工程随本仓构建先行编译。
-// Inventory UI 的替换键用其工程自身的 group 与工程名，与 Human 等仓的登记一致：同一仓库在嵌套组合里只按最先登记的规则替换，键不一致时另一方解析不到。
+// 替换键一律用各工程自身的 group 与工程名，与 Human 等仓的登记一致：同一仓库在嵌套组合里只按最先登记的规则替换，键不一致时另一方解析不到。
 kizunaWorkspace.includeSource('inventory-ui', ['': 'dev.kizuna.inventoryui:kizuna-inventory-ui-framework', server: 'dev.kizuna.inventoryui:server'])
-kizunaWorkspace.includeSource('bs3d', [client: 'local.bs3d:client', server: 'local.bs3d:server'])
+kizunaWorkspace.includeSource('bs3d', [client: 'dev.kizuna.backpack3d:client', server: 'dev.kizuna.backpack3d:server'])

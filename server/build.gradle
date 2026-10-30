@@ -1,7 +1,7 @@
 dependencies {
     // 与 client 相同，组合工程取 named 开发 JAR，避免 mod 重映射缓存滞后于上游源码。
     implementation('dev.kizuna.inventoryui:server') { targetConfiguration = 'namedElements' }
-    implementation('local.bs3d:server') { targetConfiguration = 'namedElements' }
+    implementation('dev.kizuna.backpack3d:server') { targetConfiguration = 'namedElements' }
     testImplementation libs.fabric.junit
 }
 test { systemProperty 'fabric.side', 'server' }
