@@ -13,7 +13,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** 单机和专服共用会话、计时及库存验证。 */
+/** 单机和专服共用会话与即时库存验证。 */
 public final class VanillaServer implements ModInitializer, FabricServerModule {
     private static final Set<MenuSession> SESSIONS = new HashSet<>();
 
@@ -42,10 +42,6 @@ public final class VanillaServer implements ModInitializer, FabricServerModule {
                     SESSIONS.add(session);
                     return session;
                 });
-    }
-
-    public static boolean locked(ServerPlayerEntity player) {
-        return SESSIONS.stream().anyMatch(session -> session.locks(player));
     }
 
     static void forget(MenuSession session) {

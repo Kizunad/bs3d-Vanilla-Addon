@@ -3,18 +3,29 @@ package dev.kizuna.bs3d.vanilla.smoke;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.UnknownFieldSet;
 
-import dev.kizuna.backpack3d.client.*;
+import dev.kizuna.backpack3d.client.InteriorRenderer;
+import dev.kizuna.backpack3d.client.VolumeModule;
+import dev.kizuna.backpack3d.client.WornPreview;
 import dev.kizuna.backpack3d.protocol.StackCodec;
 import dev.kizuna.backpack3d.protocol.pb.VolumeProtocol.Container;
-import dev.kizuna.bs3d.vanilla.client.*;
+import dev.kizuna.bs3d.vanilla.client.StationHost;
+import dev.kizuna.bs3d.vanilla.client.StationLayout;
+import dev.kizuna.bs3d.vanilla.client.StationPanel;
+import dev.kizuna.bs3d.vanilla.client.VanillaClient;
 import dev.kizuna.bs3d.vanilla.protocol.VanillaMessages;
-import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.*;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.ActionRequest;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.BagDestination;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.PlayerSlot;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.Status;
 import dev.kizuna.inventoryui.client.InventoryUiClient;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.*;
+import net.minecraft.client.gui.screen.AccessibilityOnboardingScreen;
+import net.minecraft.client.gui.screen.ConnectScreen;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
@@ -23,7 +34,9 @@ import net.minecraft.item.Items;
 import net.minecraft.registry.RegistryKeys;
 import net.minecraft.resource.DataConfiguration;
 import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.world.*;
+import net.minecraft.world.Difficulty;
+import net.minecraft.world.GameMode;
+import net.minecraft.world.GameRules;
 import net.minecraft.world.gen.GeneratorOptions;
 import net.minecraft.world.gen.WorldPresets;
 import net.minecraft.world.level.LevelInfo;
@@ -66,6 +79,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
         CHEST,
         CHEST_CURSOR,
         CHEST_STORED,
+        INSTANT_INPUTS,
         SAVING,
         RESTART,
         RESTORED,
@@ -80,6 +94,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
     private String bag;
     private ActionRequest storedRequest;
     private CompletableFuture<Boolean> replay;
+    private final InstantMenuProbe instantProbe = new InstantMenuProbe();
 
     @Override
     public void onInitializeClient() {
@@ -225,23 +240,23 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                     return;
                 }
                 screenshot(client, "crafting.png");
-                dragBag(screen, 1, bag);
+                dragBag(screen, 0, bag);
                 stage = Stage.CANCELLING;
             }
             case CANCELLING -> {
-                if (addon.state().getStatus() != Status.RUNNING) {
+                if (addon.state().getStatus() != Status.REJECTED) {
                     return;
                 }
-                require(volume.state().getRevision() == 1, "计时尚未完成就改了背包");
-                require(screen.getScreenHandler().getCursorStack().isEmpty(), "计时尚未完成就改了光标");
+                require(volume.state().getRevision() == 1, "拒绝结果槽位改变了背包");
+                require(screen.getScreenHandler().getCursorStack().isEmpty(), "拒绝结果槽位改变了光标");
                 screen.keyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE, 0, 0);
                 stage = Stage.REOPEN;
             }
             case REOPEN -> {
-                if (addon.state().getStatus() != Status.CLOSED) {
+                if (client.currentScreen != null || addon.state().getSyncId() != 0) {
                     return;
                 }
-                require(volume.state().getRevision() == 1, "ESC 取消改变了库存");
+                require(volume.state().getRevision() == 1, "ESC 关闭改变了被拒绝的库存");
                 command(client, "craft");
                 settle = 0;
                 stage = Stage.REOPEN_SETTLE;
@@ -425,6 +440,14 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                 require(screen.getScreenHandler().getCursorStack().isEmpty(), "箱子物品未存回背包");
                 requireStored(volume);
                 screenshot(client, "chest.png");
+                stage = Stage.INSTANT_INPUTS;
+            }
+            case INSTANT_INPUTS -> {
+                if (!instantProbe.tick(client, screen, bag)) {
+                    return;
+                }
+                requireStored(volume);
+                screenshot(client, "instant-ground-model.png");
                 screen.close();
                 settle = 0;
                 stage = Stage.SAVING;
@@ -439,13 +462,14 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                 } else {
                     finish(
                             client,
-                            "dedicated: model drag, vanilla craft consumption, offhand, timed"
-                                    + " cancel/commit, replay, forged menu/cursor/slot/fields"
-                                    + " rejection, furnace, chest, protobuf passed");
+                            "dedicated: model drag, vanilla craft consumption, offhand, instant"
+                                    + " reject/instant-commit, replay, forged menu/cursor/slot/fields"
+                                    + " rejection, furnace, chest, closed-model, shift-both-directions,"
+                                    + " E page, ground passed");
                 }
             }
             case RESTORED -> {
-                if (volume.state().getRevision() != 4) {
+                if (volume.state().getRevision() != 11) {
                     return;
                 }
                 requireStored(volume);

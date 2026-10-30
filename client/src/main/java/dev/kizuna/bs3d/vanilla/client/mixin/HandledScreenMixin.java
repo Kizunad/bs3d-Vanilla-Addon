@@ -1,26 +1,40 @@
 package dev.kizuna.bs3d.vanilla.client.mixin;
 
-import dev.kizuna.bs3d.vanilla.client.*;
-import dev.kizuna.bs3d.vanilla.protocol.VanillaMenus;
+import dev.kizuna.bs3d.vanilla.client.PlayerInventoryView;
+import dev.kizuna.bs3d.vanilla.client.StationHost;
+import dev.kizuna.bs3d.vanilla.client.StationPanel;
+import dev.kizuna.bs3d.vanilla.client.VanillaClient;
+import dev.kizuna.inventoryui.client.InventoryUiClient;
+import dev.kizuna.inventoryui.theme.ThemeTokens;
 
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.Slot;
+import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 
-import org.spongepowered.asm.mixin.*;
-import org.spongepowered.asm.mixin.injection.*;
-import org.spongepowered.asm.mixin.injection.callback.*;
+import org.lwjgl.glfw.GLFW;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /** 只在已适配的原版页面插入两侧场景，保留原版 Screen 和所有配方控件。 */
 @Mixin(HandledScreen.class)
 public abstract class HandledScreenMixin extends Screen implements StationHost {
+    @Unique private static final int BS3D_SLOT_PIXELS = 16;
+    @Unique private static final int BS3D_RGB_MASK = 0x00FFFFFF;
+    @Unique private static final int BS3D_PENDING_ALPHA = 0x70000000;
     @Shadow protected int x;
     @Shadow protected int y;
     @Shadow protected int backgroundWidth;
-    @Shadow @Final protected ScreenHandler handler;
+    @Shadow protected abstract void drawBackground(DrawContext context, float delta, int mouseX, int mouseY);
+    @Shadow protected abstract void onMouseClick(Slot slot, int slotId, int button, SlotActionType actionType);
 
     @Shadow
     private Slot getSlotAt(double x, double y) {
@@ -38,7 +52,7 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
         // 改分辨率保留已有场景相机；不支持的菜单不创建附属输入层。
         if (bs3dVanilla$panel == null
                 && VanillaClient.instance() != null
-                && VanillaMenus.supports(handler)) {
+                && stationSupported()) {
             bs3dVanilla$panel = new StationPanel((HandledScreen<?>) (Object) this);
         }
     }
@@ -47,8 +61,54 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
     private void bs3dVanilla$render(
             DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo callback) {
         // 先画场景，再让原版绘制槽位、光标和悬停提示，保留原版前后关系。
+        PlayerInventoryView.arrange((HandledScreen<?>) (Object) this);
         if (bs3dVanilla$panel != null) {
             bs3dVanilla$panel.draw(context, mouseX, mouseY);
+        }
+    }
+
+    @Inject(method = "drawSlot", at = @At("HEAD"), cancellable = true)
+    private void bs3dVanilla$pendingSlot(DrawContext context, Slot slot, CallbackInfo callback) {
+        // 源槽只在网络回执前显示半透明占位，拒绝时原版物品仍在同一位置。
+        if (!PlayerInventoryView.visible((HandledScreen<?>) (Object) this, slot)) {
+            callback.cancel();
+            return;
+        }
+        if (bs3dVanilla$pending(slot)) {
+            int color = InventoryUiClient.runtime().color(ThemeTokens.ACCENT) & BS3D_RGB_MASK | BS3D_PENDING_ALPHA;
+            context.fill(slot.x, slot.y, slot.x + BS3D_SLOT_PIXELS, slot.y + BS3D_SLOT_PIXELS, color);
+            callback.cancel();
+        }
+    }
+
+    @Unique
+    private boolean bs3dVanilla$pending(Slot slot) {
+        // 占位按服务器菜单槽号匹配，创造页的页面槽先换成对应的真实槽。
+        if (bs3dVanilla$panel == null) {
+            return false;
+        }
+        Slot menuSlot = stationMenuSlot(slot);
+        if (menuSlot == null) {
+            return false;
+        }
+        return VanillaClient.instance().pendingMenuSlot(menuSlot.id);
+    }
+
+    @Redirect(method = "render", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/client/gui/screen/ingame/HandledScreen;drawBackground"
+                    + "(Lnet/minecraft/client/gui/DrawContext;FII)V"))
+    private void bs3dVanilla$background(HandledScreen<?> screen, DrawContext context,
+                                       float delta, int mouseX, int mouseY) {
+        // 裁接只作用于背景，原版槽位物品和悬停提示仍绘制一次。
+        PlayerInventoryView.drawBackground(screen, context, () -> drawBackground(context, delta, mouseX, mouseY));
+    }
+
+    @Inject(method = "isPointOverSlot", at = @At("HEAD"), cancellable = true)
+    private void bs3dVanilla$hiddenHit(Slot slot, double mouseX, double mouseY,
+                                      CallbackInfoReturnable<Boolean> callback) {
+        // 隐藏槽同时退出命中与高亮，不能留下不可见的客户端交互区域。
+        if (!PlayerInventoryView.visible((HandledScreen<?>) (Object) this, slot)) {
+            callback.setReturnValue(false);
         }
     }
 
@@ -87,7 +147,7 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
     @Inject(method = "keyPressed", at = @At("HEAD"), cancellable = true)
     private void bs3dVanilla$key(
             int key, int scan, int modifiers, CallbackInfoReturnable<Boolean> callback) {
-        // ESC 的实际关闭继续由原版负责，附属只负责先取消计时。
+        // ESC 的实际关闭继续由原版负责，附属只负责清理本地选择。
         if (bs3dVanilla$panel != null && bs3dVanilla$panel.key(key, scan, modifiers)) {
             callback.setReturnValue(true);
         }
@@ -133,5 +193,10 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
     @Override
     public Slot stationSlotAt(double x, double y) {
         return getSlotAt(x, y);
+    }
+
+    @Override
+    public void stationClick(Slot slot) {
+        onMouseClick(slot, slot.id, GLFW.GLFW_MOUSE_BUTTON_LEFT, SlotActionType.PICKUP);
     }
 }

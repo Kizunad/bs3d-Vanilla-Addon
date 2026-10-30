@@ -1,8 +1,12 @@
 package dev.kizuna.bs3d.vanilla.protocol;
 
 import com.google.protobuf.Message;
+import dev.kizuna.backpack3d.protocol.RetiredTiming;
 
-import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.*;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.ActionRequest;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.MenuState;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.Status;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.SubscribeRequest;
 import dev.kizuna.inventoryui.protocol.pb.WireProtocol;
 
 import java.util.Map;
@@ -13,7 +17,21 @@ public final class VanillaMessages {
     public static final String SUBSCRIBE = "bs3d_vanilla:subscribe";
     public static final String ACTION = "bs3d_vanilla:action";
     public static final String STATE = "bs3d_vanilla:state";
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
+    private static final int RETIRED_ELAPSED_FIELD = 5;
+    private static final int RETIRED_DURATION_FIELD = 6;
+
+    public static <T extends Message> T validatePayload(T value) {
+        // 保留的旧计时字段必须在客户端分派之前校验，不能静默忽略非零值。
+        if (value instanceof MenuState state) {
+            RetiredTiming.validate(
+                    state, RETIRED_ELAPSED_FIELD, RETIRED_DURATION_FIELD);
+            if (state.getStatus() == Status.UNRECOGNIZED) {
+                throw new IllegalArgumentException("转移阶段无效");
+            }
+        }
+        return value;
+    }
 
     private VanillaMessages() {}
 

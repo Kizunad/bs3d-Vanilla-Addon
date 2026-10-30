@@ -2,41 +2,41 @@ package dev.kizuna.bs3d.vanilla.server;
 
 import dev.kizuna.backpack3d.protocol.StackCodec;
 import dev.kizuna.backpack3d.protocol.pb.VolumeProtocol.Cell;
-import dev.kizuna.backpack3d.server.HandlingRules;
 import dev.kizuna.backpack3d.server.InventoryAccess;
 import dev.kizuna.backpack3d.server.VolumeServer;
 import dev.kizuna.backpack3d.service.CursorTransfer;
 import dev.kizuna.backpack3d.service.TransferService;
 import dev.kizuna.bs3d.vanilla.protocol.VanillaMenus;
 import dev.kizuna.bs3d.vanilla.protocol.VanillaMessages;
-import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.*;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.ActionRequest;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.MenuState;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.Status;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.SubscribeRequest;
 import dev.kizuna.inventoryui.server.ServerConnection;
 import dev.kizuna.inventoryui.server.ServerModuleSession;
 import dev.kizuna.inventoryui.server.ServerRequest;
 
 import net.minecraft.registry.Registries;
+import net.minecraft.item.ItemStack;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.math.Vec3d;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** 页面身份、计时和幂等收据均属于本连接；请求不能访问未打开的方块。 */
+/** 页面身份和幂等收据均属于本连接；请求不能访问未打开的方块。 */
 final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
     private static final int RECEIPT_LIMIT = 128;
-    private static final double MOVEMENT_TOLERANCE_SQUARED_BLOCKS = 0.01;
     private final MinecraftServer server;
     private final ServerConnection<ServerPlayerEntity> connection;
     private final Map<String, Receipt> receipts = new LinkedHashMap<>();
     private ScreenHandler handler;
     private String menu = "";
     private boolean subscribed;
-    private Pending pending;
 
     MenuSession(MinecraftServer server, ServerConnection<ServerPlayerEntity> connection) {
         this.server = server;
@@ -47,22 +47,11 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
         return server;
     }
 
-    boolean locks(ServerPlayerEntity player) {
-        return pending != null && connection.context() == player;
-    }
-
     @Override
     public boolean handle(ServerRequest<ServerPlayerEntity> request) {
         // Framework 已认证连接身份；业务层仍需确认消息形状与当前原版页面。
         if (request.message().equals(VanillaMessages.SUBSCRIBE)) {
-            var subscription = request.payload(SubscribeRequest.getDefaultInstance());
-            if (!subscription.getUnknownFields().asMap().isEmpty()) {
-                return false;
-            }
-            subscribed = true;
-            refreshMenu();
-            publish(state("", handler == null ? Status.CLOSED : Status.READY, ""));
-            return true;
+            return subscribe(request);
         }
         if (!subscribed || !request.message().equals(VanillaMessages.ACTION)) {
             return false;
@@ -84,33 +73,65 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
                 return true;
             }
             if (action.hasCancelOperation()) {
-                cancel(action.getCancelOperation(), "操作已取消");
+                // 即时事务没有可取消的阶段，旧关闭通知不撤销已提交库存。
                 return true;
             }
-            if (pending != null || VolumeServer.locked(connection.context())) {
-                throw new IllegalArgumentException("请等待当前转移结束");
-            }
-            requireCursor(action);
-            if (action.hasPlayerSlot()) {
-                PlayerCursor.click(connection.context(), action.getPlayerSlot());
-                finish(action, Status.COMPLETED, "");
-                return true;
-            }
-            // 开始时只验证副本。真实物品留在来源，ESC 或断线不需要回滚物品。
-            CursorTransfer.Request exchange = exchange(action);
-            var candidate =
-                    InventoryAccess.previewCursor(
-                            connection.context(), exchange, action.getCursorFingerprint());
-            var material = VolumeServer.RULES.material(candidate.moved());
-            pending = new Pending(action, exchange, material, connection.context().getPos());
-            remember(action, progress());
-            publish(progress());
+            execute(action);
         } catch (IllegalArgumentException invalid) {
             // 原版全量同步纠正客户端光标预测；失败说明只发给这条已认证连接。
             connection.context().currentScreenHandler.syncState();
-            publish(state(action.getOperation(), Status.REJECTED, invalid.getMessage()));
+            if (receipts.containsKey(action.getOperation())) {
+                publish(state(action.getOperation(), Status.REJECTED, invalid.getMessage()));
+            } else {
+                finish(action, Status.REJECTED, invalid.getMessage());
+            }
         }
         return true;
+    }
+
+    private boolean subscribe(ServerRequest<ServerPlayerEntity> request) {
+        // 订阅只建立页面生命周期，地面模型在实际打开场景时授权。
+        var subscription = request.payload(SubscribeRequest.getDefaultInstance());
+        if (!subscription.getUnknownFields().asMap().isEmpty()) {
+            return false;
+        }
+        subscribed = true;
+        refreshMenu();
+        Status status = Status.READY;
+        if (handler == null) {
+            status = Status.CLOSED;
+        }
+        publish(state("", status, ""));
+        return true;
+    }
+
+    private void execute(ActionRequest action) {
+        // 页面与重放校验完成后，只执行当前操作并发布一次终态。
+        requireCursor(action);
+        if (action.hasOpenScene()) {
+            InventoryAccess.openScene(connection.context());
+            finish(action, Status.COMPLETED, "");
+            return;
+        }
+        if (action.hasPlayerSlot()) {
+            PlayerCursor.click(connection.context(), action.getPlayerSlot());
+            handler.syncState();
+            connection.context().playerScreenHandler.sendContentUpdates();
+            finish(action, Status.COMPLETED, "");
+            return;
+        }
+        var player = connection.context();
+        ItemStack moved;
+        if (action.hasTransfer()) {
+            moved = MenuTransfers.apply(player, action);
+        } else {
+            CursorTransfer.Request exchange = exchange(action);
+            var candidate = InventoryAccess.previewCursor(player, exchange, action.getCursorFingerprint());
+            moved = candidate.moved();
+            InventoryAccess.exchangeCursor(player, exchange, action.getCursorFingerprint());
+        }
+        playCompletion(moved);
+        finish(action, Status.COMPLETED, "");
     }
 
     private void validate(ActionRequest action) {
@@ -129,7 +150,14 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
         }
         if (!action.getUnknownFields().asMap().isEmpty()
                 || !action.getStoreCursor().getUnknownFields().asMap().isEmpty()
-                || !action.getPlayerSlot().getUnknownFields().asMap().isEmpty()) {
+                || !action.getPlayerSlot().getUnknownFields().asMap().isEmpty()
+                || !action.getTransfer().getUnknownFields().asMap().isEmpty()
+                || !action.getTransfer().getBag().getUnknownFields().asMap().isEmpty()
+                || !action.getTransfer().getSlot().getUnknownFields().asMap().isEmpty()
+                || !action.getTransfer().getBody().getUnknownFields().asMap().isEmpty()
+                || !action.getTransfer().getDestination().getUnknownFields().asMap().isEmpty()
+                || !action.getTransfer().getBodyDestination().getUnknownFields().asMap().isEmpty()
+                || !action.getOpenScene().getUnknownFields().asMap().isEmpty()) {
             throw new IllegalArgumentException("请求包含未定义字段");
         }
         if (action.getActionCase() == ActionRequest.ActionCase.ACTION_NOT_SET) {
@@ -165,45 +193,21 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
     }
 
     void tick() {
-        // 页面更换首先使旧事务失效；炉子仍由原版方块实体独立推进燃烧。
-        if (!subscribed) {
-            return;
-        }
-        refreshMenu();
-        if (pending == null) {
-            return;
-        }
-        var player = connection.context();
-        ActionRequest action = pending.request;
-        try {
-            validate(action);
-            requireCursor(action);
-            if (player.squaredDistanceTo(pending.origin) > MOVEMENT_TOLERANCE_SQUARED_BLOCKS) {
-                throw new IllegalArgumentException("玩家位置已变化");
-            }
-            pending.elapsed++;
-            if (pending.elapsed < pending.material.ticks()) {
-                remember(action, progress());
-                publish(progress());
-                return;
-            }
-            // 完成时重新校验最新树和指纹，再在同一服务器调用内更新背包与原版光标。
-            InventoryAccess.exchangeCursor(player, pending.exchange, action.getCursorFingerprint());
-            var sound = Registries.SOUND_EVENT.get(new Identifier(pending.material.sound()));
-            player.playSound(
-                    sound,
-                    SoundCategory.PLAYERS,
-                    pending.material.volume(),
-                    pending.material.pitch());
-            pending = null;
-            finish(action, Status.COMPLETED, "");
-        } catch (IllegalArgumentException invalid) {
-            pending = null;
-            finish(action, Status.CANCELLED, invalid.getMessage());
+        // tick 只跟踪菜单生命周期，转移在请求处理时已经结束。
+        if (subscribed) {
+            refreshMenu();
         }
     }
 
+    private void playCompletion(ItemStack stack) {
+        // 每个成功的新操作只播放一次材质声；幂等重试只重发收据。
+        var material = VolumeServer.RULES.material(stack);
+        var sound = Registries.SOUND_EVENT.get(new Identifier(material.sound()));
+        connection.context().playSound(sound, SoundCategory.PLAYERS, material.volume(), material.pitch());
+    }
+
     private void refreshMenu() {
+        // 更换原版页面会失效旧菜单身份和收据，不能重放到新页面。
         var player = connection.context();
         ScreenHandler next = player.currentScreenHandler;
         if (!VanillaMenus.supports(next)
@@ -215,28 +219,11 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
         if (next == handler) {
             return;
         }
-        // 旧页面的计时和收据一并释放；光标交由原版 closeHandledScreen 归还。
-        pending = null;
+        // 旧页面的收据释放；光标交由原版 closeHandledScreen 归还。
         receipts.clear();
         handler = next;
         menu = next == null ? "" : UUID.randomUUID().toString();
         publish(state("", next == null ? Status.CLOSED : Status.READY, ""));
-    }
-
-    private void cancel(String operation, String detail) {
-        // 仅取消指定操作，延迟到达的 ESC 不能取消后来开始的另一件物品。
-        if (pending != null && pending.request.getOperation().equals(operation)) {
-            var action = pending.request;
-            pending = null;
-            finish(action, Status.CANCELLED, detail);
-        }
-    }
-
-    private MenuState progress() {
-        return state(pending.request.getOperation(), Status.RUNNING, "").toBuilder()
-                .setElapsedTicks(pending.elapsed)
-                .setDurationTicks(pending.material.ticks())
-                .build();
     }
 
     private MenuState state(String operation, Status status, String detail) {
@@ -269,30 +256,11 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
 
     @Override
     public void close() {
-        // 尚未提交的动作没有改过真实栈，断线只需释放计时和位置锁。
-        pending = null;
+        // 即时事务已经结束，断线仅释放会话收据。
         receipts.clear();
         VanillaServer.forget(this);
     }
 
     private record Receipt(ActionRequest request, MenuState response) {}
 
-    private static final class Pending {
-        final ActionRequest request;
-        final CursorTransfer.Request exchange;
-        final HandlingRules.Material material;
-        final Vec3d origin;
-        int elapsed;
-
-        Pending(
-                ActionRequest request,
-                CursorTransfer.Request exchange,
-                HandlingRules.Material material,
-                Vec3d origin) {
-            this.request = request;
-            this.exchange = exchange;
-            this.material = material;
-            this.origin = origin;
-        }
-    }
 }

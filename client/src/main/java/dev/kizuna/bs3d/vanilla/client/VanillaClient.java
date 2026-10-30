@@ -5,8 +5,12 @@ import com.google.protobuf.Message;
 import dev.kizuna.backpack3d.client.VolumeModule;
 import dev.kizuna.backpack3d.protocol.StackCodec;
 import dev.kizuna.bs3d.vanilla.protocol.VanillaMessages;
-import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.*;
-import dev.kizuna.inventoryui.client.*;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.ActionRequest;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.MenuState;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.SubscribeRequest;
+import dev.kizuna.inventoryui.client.ClientBindings;
+import dev.kizuna.inventoryui.client.ClientModule;
+import dev.kizuna.inventoryui.client.ClientRuntime;
 import dev.kizuna.inventoryui.protocol.UiMessageRouter;
 import dev.kizuna.inventoryui.protocol.UiWire;
 import dev.kizuna.inventoryui.registry.FrameworkCatalog;
@@ -27,7 +31,7 @@ public final class VanillaClient implements ClientModule {
     private ClientRuntime runtime;
     private MenuState state = MenuState.getDefaultInstance();
     private String pending = "";
-    private String cancelling = "";
+    private int pendingMenuSlot = -1;
     private String error = "";
     private long generation;
 
@@ -44,11 +48,22 @@ public final class VanillaClient implements ClientModule {
     }
 
     public boolean busy() {
-        return !pending.isEmpty() || state.getStatus() == Status.RUNNING;
+        // 客户端只等待终态回执，不维护服务器执行进度。
+        return !pending.isEmpty();
+    }
+
+    public boolean pendingMenuSlot(int slot) {
+        // 原版槽位保留来源占位，收到终态后恢复原版绘制。
+        return !pending.isEmpty() && pendingMenuSlot == slot;
     }
 
     public String detail() {
         return error.isEmpty() ? state.getDetail() : error;
+    }
+
+    public void reject(String reason) {
+        // 页面在本地拒绝的操作同样显示在反馈行，下一次提交意图时清除。
+        error = reason;
     }
 
     @Override
@@ -86,15 +101,7 @@ public final class VanillaClient implements ClientModule {
                 MenuState.getDefaultInstance(),
                 UiMessageRouter.Direction.SERVER_TO_CLIENT,
                 this::accept);
-        ClientTickEvents.END_CLIENT_TICK.register(
-                client -> {
-                    // UI 输入和服务端位置锁同时存在；修改客户端不可能缩短服务端计时。
-                    if (busy() && client.player != null) {
-                        client.player.input.movementForward = 0;
-                        client.player.input.movementSideways = 0;
-                        client.player.input.jumping = false;
-                    }
-                });
+
     }
 
     private static <T extends Message> void bind(
@@ -113,7 +120,8 @@ public final class VanillaClient implements ClientModule {
                         direction,
                         type,
                         receiver);
-        bindings.message(new UiWire.Contract<>(contract, UiWire.Codec.protobuf(sample), false));
+        UiWire.Codec<T> codec = UiWire.Codec.protobuf(sample, value -> value, VanillaMessages::validatePayload);
+        bindings.message(new UiWire.Contract<>(contract, codec, false /* required */));
     }
 
     @Override
@@ -148,7 +156,15 @@ public final class VanillaClient implements ClientModule {
         var request = base(screen);
         fill.accept(request);
         pending = request.getOperation();
-        cancelling = "";
+        var transfer = request.getTransfer();
+        if (transfer.hasSlot()) {
+            pendingMenuSlot = transfer.getSlot().getSlot();
+        }
+        if (transfer.hasItem()) {
+            volume.showPendingPreview(transfer.getItem());
+        } else if (transfer.hasBody()) {
+            volume.showPendingPreview(VolumeModule.playerSlotPreviewId(transfer.getBody().getSlot()));
+        }
         error = "";
         send(request.build());
         return true;
@@ -164,19 +180,8 @@ public final class VanillaClient implements ClientModule {
                         StackCodec.fingerprint(screen.getScreenHandler().getCursorStack()));
     }
 
-    public void cancel(HandledScreen<?> screen) {
-        // CANCEL 保留原操作身份，不能把取消请求本身误当成另一项正在转移的物品。
-        if (ready(screen) && busy()) {
-            String operation = pending.isEmpty() ? state.getOperation() : pending;
-            if (operation.equals(cancelling)) {
-                return;
-            }
-            cancelling = operation;
-            send(base(screen).setCancelOperation(operation).build());
-        }
-    }
-
     private void send(ActionRequest request) {
+        // 同一请求携带完整落点，失败回执负责恢复来源占位。
         long current = generation;
         runtime.protocol()
                 .request(VanillaMessages.ACTION, request, System.currentTimeMillis())
@@ -188,7 +193,7 @@ public final class VanillaClient implements ClientModule {
                                     && pending.equals(request.getOperation())) {
                                 pending = "";
                                 error = "操作未提交：" + result.code();
-                                notifyPanel(false);
+                                clearPendingPreview();
                             }
                         });
     }
@@ -197,25 +202,22 @@ public final class VanillaClient implements ClientModule {
         // 页面身份变化先清理旧拖放；迟到的旧操作结果不能落入新页面的槽位。
         if (!next.getMenu().equals(state.getMenu())) {
             pending = "";
-            cancelling = "";
-            notifyPanel(false);
+            clearPendingPreview();
         }
         state = next;
-        if (next.getStatus() == Status.RUNNING || next.getOperation().isEmpty()) {
+        if (next.getOperation().isEmpty()) {
             return;
         }
         if (next.getOperation().equals(pending)) {
             pending = "";
-            notifyPanel(next.getStatus() == Status.COMPLETED);
+            clearPendingPreview();
         }
     }
 
-    private void notifyPanel(boolean completed) {
-        // 只通知仍在显示的原版页面，已关闭场景不再执行异步拖放。
-        var screen = MinecraftClient.getInstance().currentScreen;
-        if (screen instanceof StationHost host && host.stationPanel() != null) {
-            host.stationPanel().completed(completed);
-        }
+    private void clearPendingPreview() {
+        // 终态或页面更换后恢复来源占位，不再执行排队的落点点击。
+        volume.clearPendingPreview();
+        pendingMenuSlot = -1;
     }
 
     @Override
@@ -223,7 +225,6 @@ public final class VanillaClient implements ClientModule {
         // 更换连接身份并清空捕获，上一世界的异步回执不能恢复旧页面。
         generation++;
         pending = "";
-        cancelling = "";
         state = MenuState.getDefaultInstance();
         this.runtime = null;
         error = "";

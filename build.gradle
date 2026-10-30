@@ -66,6 +66,8 @@ subprojects {
     }
     jar { from rootProject.file('LICENSE') }
     loom {
+        // 客户端产物包含单机服务端源码，两端生成各自完整且同名的映射。
+        mixin { defaultRefmapName = 'bs3d.vanilla.refmap.json' }
         mods {
             'bs3d_vanilla_addon' { sourceSet sourceSets.main }
             'bs3d_vanilla_smoke' { sourceSet sourceSets.smoke }

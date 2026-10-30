@@ -2,8 +2,9 @@
   "required": true,
   "package": "dev.kizuna.bs3d.vanilla.mixin",
   "compatibilityLevel": "JAVA_17",
+  "refmap": "bs3d.vanilla.refmap.json",
   "mixins": [
-    "MovementLockMixin"
+    "ScreenHandlerAccess"
   ],
   "injectors": {
     "defaultRequire": 1

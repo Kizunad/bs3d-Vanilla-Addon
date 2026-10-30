@@ -4,6 +4,8 @@ sourceSets.main.java.srcDir rootProject.file('server/src/main/java')
 dependencies {
     modImplementation files(new File(rootProject.frameworkDir, 'build/libs/kizuna-inventory-ui-framework-0.1.0-SNAPSHOT.jar'))
     modImplementation files(new File(rootProject.bs3dDir, 'client/build/libs/backpack-storage-3d-client-0.1.0-SNAPSHOT.jar'))
+    modImplementation files(new File(rootProject.frameworkDir, 'server/build/libs/kizuna-inventory-ui-framework-server-0.1.0-SNAPSHOT.jar'))
+    modImplementation files(new File(rootProject.bs3dDir, 'server/build/libs/backpack-storage-3d-server-0.1.0-SNAPSHOT.jar'))
     modImplementation 'io.wispforest:owo-lib:0.11.2+1.20'
     // 本地 runSmoke 使用 BS3D 的源码编译依赖解析；生产端仍由 BS3D JAR 内嵌。
     implementation 'org.tomlj:tomlj:1.1.1'

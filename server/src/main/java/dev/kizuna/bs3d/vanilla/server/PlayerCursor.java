@@ -35,6 +35,11 @@ final class PlayerCursor {
                                                 && value.getIndex() == index)
                         .findFirst()
                         .orElseThrow(() -> new IllegalArgumentException("部位槽位不存在"));
+        if (active == body) {
+            // E 页本来就持有玩家光标，不需要借用和归还。
+            body.onSlotClick(slot.id, 0, SlotActionType.PICKUP, player);
+            return;
+        }
         if (!body.getCursorStack().isEmpty()) {
             throw new IllegalArgumentException("玩家背包光标尚未归还");
         }
@@ -46,8 +51,6 @@ final class PlayerCursor {
         } finally {
             active.setCursorStack(body.getCursorStack());
             body.setCursorStack(ItemStack.EMPTY);
-            active.syncState();
-            body.sendContentUpdates();
         }
     }
 }

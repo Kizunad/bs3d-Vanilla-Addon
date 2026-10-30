@@ -1,33 +1,44 @@
 package dev.kizuna.bs3d.vanilla.client;
 
-import dev.kizuna.backpack3d.client.*;
+import dev.kizuna.backpack3d.client.BagAnimation;
+import dev.kizuna.backpack3d.client.InteriorRenderer;
+import dev.kizuna.backpack3d.client.LayerRangeSlider;
+import dev.kizuna.backpack3d.client.ModelResources;
+import dev.kizuna.backpack3d.client.VolumeModule;
+import dev.kizuna.backpack3d.client.WornPreview;
 import dev.kizuna.backpack3d.client.InteriorRenderer.Rect;
 import dev.kizuna.backpack3d.item.ContainerSounds;
 import dev.kizuna.backpack3d.protocol.OrthogonalRotation;
 import dev.kizuna.backpack3d.protocol.StackCodec;
+import dev.kizuna.backpack3d.protocol.Volumes;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.DragTransfer;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.MenuSlot;
 import dev.kizuna.backpack3d.protocol.pb.VolumeProtocol.Container;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.BagDestination;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.PlayerSlot;
+import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.OpenSceneRequest;
 import dev.kizuna.inventoryui.client.InventoryUiClient;
 import dev.kizuna.inventoryui.theme.ThemeTokens;
 
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.screen.slot.Slot;
 import net.minecraft.item.ItemStack;
-import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 
 import org.lwjgl.glfw.GLFW;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Predicate;
 
 /** 原版操作区两侧的玩家与背包场景；不重绘工作站槽位，也不接管配方按钮。 */
 public final class StationPanel {
     private static final int GAP_PIXELS = 4;
     private static final int BUTTON_PIXELS = 16;
-    private static final int PROGRESS_HEIGHT_PIXELS = 3;
     private static final int DRAG_THRESHOLD_SQUARED_PIXELS = 9;
     private static final int TOOLTIP_OFFSET_PIXELS = 8;
     private static final float PLAYER_BASELINE_RATIO = 0.84f;
@@ -35,6 +46,7 @@ public final class StationPanel {
     private static final float PLAYER_WIDTH_RATIO = 0.45f;
     private static final float NANOS_PER_SECOND = 1_000_000_000f;
     private static final int INFO_RADIUS_PIXELS = 7;
+    private static final String LOCAL_CURSOR_DETAIL = "请先把光标上的物品放进槽位";
     private final HandledScreen<?> screen;
     private final StationHost host;
     private final VanillaClient addon;
@@ -49,15 +61,15 @@ public final class StationPanel {
     private boolean rotatingPlayer;
     private boolean rotatingInterior;
     private boolean sliding;
-    private boolean ownPickup;
     private boolean moved;
     private double pressX;
     private double pressY;
     private int mouseX;
     private int mouseY;
     private int orientation;
-    private Runnable queuedDrop;
+    private DragTransfer selection;
     private long lastFrame;
+    private String sceneMenu = "";
 
     public StationPanel(HandledScreen<?> screen) {
         this.screen = screen;
@@ -68,12 +80,20 @@ public final class StationPanel {
     }
 
     private StationLayout layout() {
-        return StationLayout.beside(
-                screen.width, screen.height, host.stationLeft(), host.stationWidth());
+        // 页面提供区域，人物和内景继续使用同一套渲染与拖放逻辑。
+        return host.stationLayout();
+    }
+
+    public boolean interiorOpen() {
+        // 玩家 E 页用内景替换合成展示，合成库存仍由原版持有。
+        return !active.isEmpty();
     }
 
     public boolean enabled() {
-        // 高 GUI 缩放或展开配方书挤占空间时，保留完整原版交互，不叠压模型到槽位上。
+        // 页签不承载玩家库存、高 GUI 缩放或展开配方书挤占空间时，保留完整原版交互，不叠压模型到槽位上。
+        if (!host.stationActive()) {
+            return false;
+        }
         if (screen instanceof net.minecraft.client.gui.screen.recipebook.RecipeBookProvider recipes
                 && recipes.getRecipeBookWidget().isOpen()) {
             return false;
@@ -82,19 +102,51 @@ public final class StationPanel {
     }
 
     public void draw(DrawContext context, int mx, int my) {
+        // 页面状态就绪后绘制人物、内景与同一事务的反馈。
         if (!enabled()) {
             return;
+        }
+        // 新页面首次绘制时建立地面租约，不在渲染循环里重复扫描世界目录。
+        String menu = addon.state().getMenu();
+        if (!sceneMenu.equals(menu) && openScene()) {
+            sceneMenu = menu;
         }
         mouseX = mx;
         mouseY = my;
         syncAnimations();
         var layout = layout();
-        Rect body = layout.player();
+        drawPlayer(context, layout.player(), mx, my);
+        drawInterior(context, layout.interior(), mx, my);
+        drawInfo(context, layout);
+        player.drawDropTarget(context, MinecraftClient.getInstance().textRenderer, mx, my);
+        drawFeedback(context, layout, mx, my);
+    }
+
+    private boolean openScene() {
+        // 本地光标携物时服务器光标为空，场景请求会被指纹拒绝；放下物品后的下一帧再建立。
+        if (localCursor()) {
+            return false;
+        }
+        return addon.action(screen, request -> request.setOpenScene(OpenSceneRequest.getDefaultInstance()));
+    }
+
+    private void drawPlayer(DrawContext context, Rect body, int mx, int my) {
+        // 抓取来源使模型高亮变为可落色，网络等待仍保留权威来源占位。
         int scale =
                 (int)
                         Math.min(
                                 body.width() * PLAYER_WIDTH_RATIO,
                                 body.height() * PLAYER_HEIGHT_RATIO);
+        String source = "";
+        if (selection != null) {
+            source = selection.getItem();
+            if (source.isEmpty()) {
+                source = "cursor";
+            }
+        } else if (!screen.getScreenHandler().getCursorStack().isEmpty()) {
+            source = "cursor";
+        }
+        player.dropSource(source);
         player.draw(
                 context,
                 body.x() + body.width() / 2,
@@ -104,15 +156,17 @@ public final class StationPanel {
                 my,
                 !help && !addon.busy() && body.contains(mx, my),
                 animations);
-        drawInterior(context, layout.interior(), mx, my);
-        drawInfo(context, layout);
+    }
+
+    private void drawFeedback(DrawContext context, StationLayout layout, int mx, int my) {
+        // 拒绝原因贴在内景区域底边，原版槽位排在场景下方时也不会被背景盖住。
         var font = MinecraftClient.getInstance().textRenderer;
         if (!addon.detail().isBlank()) {
             context.drawTextWithShadow(
                     font,
                     font.trimToWidth(addon.detail(), layout.interior().width()),
                     layout.interior().x(),
-                    screen.height - StationLayout.HEADER_PIXELS,
+                    layout.interior().bottom() - font.fontHeight,
                     color(ThemeTokens.ACCENT));
         }
         // 模型和内景共用原版物品 tooltip，简介由 BS3D 已注册的回调追加。
@@ -193,26 +247,6 @@ public final class StationPanel {
         range.draw(context, font);
         Rect viewport = viewport();
         interior.draw(context, volume, container, viewport, mx, my, "", null, orientation);
-        var state = addon.state();
-        if (state.getDurationTicks() > 0 && addon.busy()) {
-            int filled =
-                    (int)
-                            ((long) area.width()
-                                    * state.getElapsedTicks()
-                                    / state.getDurationTicks());
-            context.fill(
-                    area.x(),
-                    viewport.bottom(),
-                    area.right(),
-                    viewport.bottom() + PROGRESS_HEIGHT_PIXELS,
-                    color(ThemeTokens.PROGRESS_TRACK));
-            context.fill(
-                    area.x(),
-                    viewport.bottom(),
-                    area.x() + filled,
-                    viewport.bottom() + PROGRESS_HEIGHT_PIXELS,
-                    color(ThemeTokens.PROGRESS_FILL));
-        }
     }
 
     private void drawInfo(DrawContext context, StationLayout layout) {
@@ -244,7 +278,7 @@ public final class StationPanel {
                                     "点击身上背包打开内景。\n"
                                             + "双手、盔甲和内景物品可拖到原版槽位；反向拖动可存回。\n"
                                             + "拖动空白处旋转，滚轮缩放内景。R/T 旋转待存物品，范围条选择可见层。\n"
-                                            + "背包取放需要时间；ESC 取消并关闭。"),
+                                            + "Shift 双向快捷搬运；拖到容器模型自动放入；ESC 关闭。"),
                             area.width());
             int bottom = area.y() + lines.size() * (font.fontHeight + GAP_PIXELS) + GAP_PIXELS * 2;
             context.fill(
@@ -259,6 +293,7 @@ public final class StationPanel {
     }
 
     public boolean press(double x, double y, int button) {
+        // 原版槽位先于人物和内景解析，按下时只记录来源。
         if (!enabled()) {
             return false;
         }
@@ -270,40 +305,125 @@ public final class StationPanel {
         moved = false;
         var layout = layout();
         if (button != GLFW.GLFW_MOUSE_BUTTON_LEFT) {
-            return layout.player().contains(x, y) || layout.interior().contains(x, y);
+            return pressOther(x, y, button, layout);
         }
         if (x >= screen.width - BUTTON_PIXELS - StationLayout.MARGIN_PIXELS
                 && y < StationLayout.HEADER_PIXELS) {
             help = !help;
             return true;
         }
-        if (layout.player().contains(x, y)) {
-            String bag = player.pick(x, y);
-            if (!bag.isEmpty()) {
-                open(bag);
-                return true;
-            }
-            int slot = player.slotAt(x, y);
-            if (slot >= 0) {
-                boolean picking = screen.getScreenHandler().getCursorStack().isEmpty();
-                if (clickPlayer(slot)) {
-                    ownPickup = picking;
-                }
-            } else {
-                rotatingPlayer = true;
-            }
+        if (captureMenuSlot(x, y) || selection != null) {
             return true;
+        }
+        if (host.stationSlotAt(x, y) != null) {
+            // 场景区域内的原版槽位（如 E 页合成格）同样按原版槽位处理，落点在松开时解析。
+            return false;
+        }
+        if (layout.player().contains(x, y)) {
+            return pressPlayer(x, y);
         }
         if (!layout.interior().contains(x, y)) {
             return false;
         }
+        return pressInterior(x, y, layout.interior());
+    }
+
+    private boolean pressOther(double x, double y, int button, StationLayout layout) {
+        // 原版槽位的右键分堆交给原版；人物区按住右键拖动只旋转模型。
+        if (host.stationSlotAt(x, y) != null) {
+            return false;
+        }
+        boolean onPlayer = layout.player().contains(x, y);
+        if (button == GLFW.GLFW_MOUSE_BUTTON_RIGHT && onPlayer) {
+            rotatingPlayer = true;
+        }
+        return onPlayer || layout.interior().contains(x, y);
+    }
+
+    private boolean captureMenuSlot(double x, double y) {
+        // 原版抓取只记录来源，Shift 才直接选择随身自动目标；页面专有槽交给原版。
+        Slot pressed = host.stationSlotAt(x, y);
+        if (pressed != null && pressed.hasStack()
+                && screen.getScreenHandler().getCursorStack().isEmpty()) {
+            var source = menuSlot(pressed);
+            if (source == null) {
+                return false;
+            }
+            if (selection == null) {
+                orientation = 0;
+                selection = DragTransfer.newBuilder()
+                        .setSlot(source)
+                        .build();
+                if (Screen.hasShiftDown()) {
+                    submit(selection.toBuilder().setBag(automatic(Volumes.CARRIED)));
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private boolean pressPlayer(double x, double y) {
+        // 模型命中优先于身体部位，携物点击模型使用自动寻位。
+        String bag = player.pick(x, y);
+        if (!bag.isEmpty()) {
+            if (screen.getScreenHandler().getCursorStack().isEmpty()) {
+                open(bag);
+            } else {
+                var target = automatic(bag);
+                submit(DragTransfer.newBuilder()
+                        .setCursor(true /* cursor */)
+                        .setBag(target));
+            }
+            return true;
+        }
+        int slot = player.slotAt(x, y);
+        if (slot < 0) {
+            rotatingPlayer = true;
+        } else if (screen.getScreenHandler().getCursorStack().isEmpty()) {
+            selectBody(slot);
+        } else {
+            dropOnBody(slot);
+        }
+        return true;
+    }
+
+    private void selectBody(int slot) {
+        // 身体部位只记录来源，Shift 直接选择随身自动目标。
+        orientation = 0;
+        var source = bodySlot(slot);
+        selection = DragTransfer.newBuilder()
+                .setBody(source)
+                .build();
+        if (Screen.hasShiftDown()) {
+            submit(selection.toBuilder().setBag(automatic(Volumes.CARRIED)));
+        }
+    }
+
+    private void dropOnBody(int slot) {
+        // 本地光标没有服务器对应物，穿戴改为点击对应的原版页面槽，盔甲槽规则仍由原版槽位判断。
+        if (localCursor()) {
+            Slot target = bodyPageSlot(slot);
+            if (target != null) {
+                host.stationClick(target);
+            }
+            return;
+        }
+        var target = bodySlot(slot);
+        submit(DragTransfer.newBuilder()
+                .setCursor(true /* cursor */)
+                .setBodyDestination(target));
+    }
+
+    private boolean pressInterior(double x, double y, Rect area) {
+        // 标题和切片控件先处理，只有可用内景才允许选择物品。
         if (active.isEmpty()) {
             return true;
         }
-        if (y < layout.interior().y() + StationLayout.HEADER_PIXELS) {
-            if (x >= layout.interior().right() - BUTTON_PIXELS) {
+        if (y < area.y() + StationLayout.HEADER_PIXELS) {
+            if (x >= area.right() - BUTTON_PIXELS) {
                 closeInterior();
-            } else if (x >= layout.interior().right() - BUTTON_PIXELS * 2) {
+            } else if (x >= area.right() - BUTTON_PIXELS * 2) {
                 minimized = !minimized;
             }
             return true;
@@ -326,13 +446,28 @@ public final class StationPanel {
             store(x, y);
             return true;
         }
+        selectInteriorItem(x, y);
+        return true;
+    }
+
+    private void selectInteriorItem(double x, double y) {
+        // 内景保留物品朝向，空白处仅旋转相机。
         String item = interiors.get(active).itemAt(x, y);
         if (item.isEmpty()) {
             rotatingInterior = true;
         } else {
-            ownPickup = addon.action(screen, request -> request.setTakeItem(item));
+            selection = DragTransfer.newBuilder()
+                    .setItem(item)
+                    .build();
+            orientation = volume.state().getItemsList().stream()
+                    .filter(value -> value.getId().equals(item))
+                    .findFirst()
+                    .orElseThrow()
+                    .getOrientation();
+            if (Screen.hasShiftDown()) {
+                submit(selection.toBuilder().setPlayerInventory(true /* playerInventory */));
+            }
         }
-        return true;
     }
 
     public void open(String id) {
@@ -347,43 +482,113 @@ public final class StationPanel {
     }
 
     private void closeInterior() {
-        // 关闭只改变展示和声音，仍在计时的物品由服务器与页面生命周期处理。
+        // 关闭只改变展示和声音，即时转移已经完成。
         animations.get(active).close();
         volume.containerSound(active, ContainerSounds.Action.CLOSE);
         active = "";
     }
 
-    private boolean clickPlayer(int slot) {
+    private PlayerSlot bodySlot(int slot) {
+        // 模型部位使用真实玩家槽号，指纹固定在抓取或选择落点时。
         var stack = MinecraftClient.getInstance().player.getInventory().getStack(slot);
-        var target =
-                PlayerSlot.newBuilder()
-                        .setSlot(slot)
-                        .setFingerprint(StackCodec.fingerprint(stack))
-                        .build();
-        return addon.action(screen, request -> request.setPlayerSlot(target));
+        return PlayerSlot.newBuilder()
+                .setSlot(slot)
+                .setFingerprint(StackCodec.fingerprint(stack))
+                .build();
+    }
+
+    private MenuSlot menuSlot(Slot pageSlot) {
+        // 原版页面槽号与 PlayerInventory 槽号不同，协议明确区分；页面专有槽没有服务器槽，返回 null。
+        Slot slot = host.stationMenuSlot(pageSlot);
+        if (slot == null) {
+            return null;
+        }
+        return MenuSlot.newBuilder()
+                .setSlot(slot.id)
+                .setFingerprint(StackCodec.fingerprint(slot.getStack()))
+                .build();
+    }
+
+    private Slot findPageSlot(Predicate<Slot> menuSlot) {
+        // 按服务器菜单槽反查页面上的点击入口，普通页面两者是同一个槽。
+        for (Slot slot : screen.getScreenHandler().slots) {
+            Slot target = host.stationMenuSlot(slot);
+            if (target != null && menuSlot.test(target)) {
+                return slot;
+            }
+        }
+        return null;
+    }
+
+    private Slot bodyPageSlot(int inventorySlot) {
+        // 创造页的盔甲与副手槽虽不显示，仍是原版创造写入的入口。
+        var inventory = MinecraftClient.getInstance().player.getInventory();
+        return findPageSlot(target -> target.inventory == inventory && target.getIndex() == inventorySlot);
+    }
+
+    private boolean localCursor() {
+        // 创造页光标只在客户端，携物时提交事务会被指纹拒绝，随后的全量同步还会清掉本地光标。
+        if (host.stationSharedCursor()) {
+            return false;
+        }
+        return !screen.getScreenHandler().getCursorStack().isEmpty();
+    }
+
+    private BagDestination automatic(String container) {
+        // 模型落点不提交切片和格位，服务端保留朝向搜索完整容量。
+        return BagDestination.newBuilder()
+                .setContainer(container)
+                .setOrientation(orientation)
+                .setAutoPlace(true /* autoPlace */)
+                .build();
+    }
+
+    private BagDestination manual(double x, double y) {
+        // 只有内景具体格位使用手动放置，合盖模型由 automatic 处理。
+        if (active.isEmpty() || minimized || !viewport().contains(x, y)) {
+            return null;
+        }
+        var interior = interiors.get(active);
+        if (interior == null) {
+            return null;
+        }
+        var cell = interior.cellAt(x, y);
+        if (cell == null) {
+            return null;
+        }
+        return BagDestination.newBuilder()
+                .setContainer(active)
+                .setX(cell.getX())
+                .setY(cell.getY())
+                .setZ(cell.getZ())
+                .setOrientation(orientation)
+                .build();
     }
 
     private void store(double x, double y) {
-        // 落点来自真实投影；是否放得下以及尺寸仍由服务器决定。
-        if (active.isEmpty() || minimized || !viewport().contains(x, y)) {
+        // 原版光标来源同样只提交一次完整转移意图。
+        var target = manual(x, y);
+        if (target != null) {
+            submit(DragTransfer.newBuilder()
+                    .setCursor(true /* cursor */)
+                    .setBag(target));
+        }
+    }
+
+    private void submit(DragTransfer.Builder transfer) {
+        // 请求发出前不碰原版光标，回执无需再补一次客户端点击；本地光标携物时只提示，不提交。
+        if (localCursor()) {
+            addon.reject(LOCAL_CURSOR_DETAIL);
+            resetCapture();
             return;
         }
-        var cell = interiors.get(active).cellAt(x, y);
-        if (cell == null) {
-            return;
-        }
-        var target =
-                BagDestination.newBuilder()
-                        .setContainer(active)
-                        .setX(cell.getX())
-                        .setY(cell.getY())
-                        .setZ(cell.getZ())
-                        .setOrientation(orientation)
-                        .build();
-        addon.action(screen, request -> request.setStoreCursor(target));
+        var request = transfer.build();
+        addon.action(screen, action -> action.setTransfer(request));
+        resetCapture();
     }
 
     public boolean drag(double x, double y, int button, double dx, double dy) {
+        // 只有抓取的物品进入拖放，其余输入维持场景旋转。
         if (!enabled()) {
             return false;
         }
@@ -398,10 +603,11 @@ public final class StationPanel {
         } else if (rotatingInterior) {
             interiors.get(active).rotate(dx, dy);
         }
-        return ownPickup || addon.busy() || sliding || rotatingPlayer || rotatingInterior;
+        return selection != null || addon.busy() || sliding || rotatingPlayer || rotatingInterior;
     }
 
     public boolean release(double x, double y, int button) {
+        // 松开时才确定完整来源与落点，网络回执不再触发第二次鼠标操作。
         if (!enabled()) {
             resetCapture();
             return false;
@@ -410,64 +616,118 @@ public final class StationPanel {
         sliding = false;
         rotatingPlayer = false;
         rotatingInterior = false;
-        if (camera) {
+        if (camera || addon.busy()) {
             return true;
         }
-        boolean fromModel = ownPickup;
-        ownPickup = false;
-        if (addon.busy() && !fromModel) {
+        if (button != GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+            return false;
+        }
+        if (clicksSource(x, y)) {
+            clickSelection();
             return true;
         }
-        if (button != GLFW.GLFW_MOUSE_BUTTON_LEFT || !moved) {
-            return fromModel || addon.busy();
+        if (selection == null && localCursor()) {
+            // 本地光标的放置交给原版；场景内的松开由场景消费，不被原版当作窗口外丢出。
+            return inScene(x, y);
         }
-        Runnable drop = dropAt(x, y);
-        if (fromModel && addon.busy()) {
-            // 松开鼠标可能早于计时完成；仅成功回执到达后才执行同一页面的原版落点。
-            queuedDrop = drop;
+        DragTransfer source = releaseSource();
+        if (source == null) {
+            return false;
+        }
+        if (!moved && source.hasItem() && source.getItem().equals(itemAt(x, y))) {
             return true;
         }
-        if (drop != null && !screen.getScreenHandler().getCursorStack().isEmpty()) {
-            drop.run();
+        var target = destination(source.toBuilder(), x, y);
+        if (target != null) {
+            submit(target);
             return true;
         }
-        return fromModel;
+        return selection != null;
     }
 
-    private Runnable dropAt(double x, double y) {
-        var slot = host.stationSlotAt(x, y);
+    private DragTransfer releaseSource() {
+        // 没有按下记录的来源时，原版光标上的物品就是来源。
+        if (selection != null) {
+            return selection;
+        }
+        if (screen.getScreenHandler().getCursorStack().isEmpty()) {
+            return null;
+        }
+        return DragTransfer.newBuilder()
+                .setCursor(true /* cursor */)
+                .build();
+    }
+
+    private boolean clicksSource(double x, double y) {
+        // 未拖动，或落在删除格等页面专有槽上，都与原版一样只把来源槽点起到光标上。
+        if (selection == null || !selection.hasSlot()) {
+            return false;
+        }
+        if (!moved) {
+            return true;
+        }
+        Slot slot = host.stationSlotAt(x, y);
+        if (slot == null) {
+            return false;
+        }
+        return host.stationMenuSlot(slot) == null;
+    }
+
+    private void clickSelection() {
+        // 未拖动的原版槽按一次原版点击处理，页面自身的点击规则随之生效。
+        int source = selection.getSlot().getSlot();
+        Slot clicked = findPageSlot(target -> target.id == source);
+        if (clicked != null) {
+            host.stationClick(clicked);
+        }
+        resetCapture();
+    }
+
+    private boolean inScene(double x, double y) {
+        var layout = layout();
+        if (layout.player().contains(x, y)) {
+            return true;
+        }
+        return layout.interior().contains(x, y);
+    }
+
+    private DragTransfer.Builder destination(DragTransfer.Builder source, double x, double y) {
+        // 原版槽、容器模型与具体内景格位按显示层次选择唯一落点；页面专有槽不接收事务。
+        Slot slot = host.stationSlotAt(x, y);
         if (slot != null) {
-            return () ->
-                    MinecraftClient.getInstance()
-                            .interactionManager
-                            .clickSlot(
-                                    screen.getScreenHandler().syncId,
-                                    slot.id,
-                                    0,
-                                    SlotActionType.PICKUP,
-                                    MinecraftClient.getInstance().player);
+            var target = menuSlot(slot);
+            if (target == null) {
+                return null;
+            }
+            return source.setDestination(target);
         }
         if (layout().player().contains(x, y)) {
-            int bodySlot = player.slotAt(x, y);
-            return bodySlot < 0 ? null : () -> clickPlayer(bodySlot);
+            String bag = player.pick(x, y);
+            if (!bag.isEmpty()) {
+                return source.setBag(automatic(bag));
+            }
+            int body = player.slotAt(x, y);
+            if (body >= 0) {
+                return source.setBodyDestination(bodySlot(body));
+            }
         }
-        if (!active.isEmpty() && !minimized && viewport().contains(x, y)) {
-            return () -> store(x, y);
+        var target = manual(x, y);
+        if (target != null) {
+            return source.setBag(target);
         }
         return null;
     }
 
-    public void completed(boolean accepted) {
-        // 服务器失败、换页或断线都清掉预定落点，不把旧拖放带到另一个容器。
-        Runnable drop = queuedDrop;
-        queuedDrop = null;
-        if (!accepted) {
-            ownPickup = false;
-            return;
+    private String itemAt(double x, double y) {
+        // 仅查询当前已展开内景，不能沿用被关闭窗口的旧命中。
+        if (active.isEmpty() || minimized || !viewport().contains(x, y)) {
+            return "";
         }
-        if (drop != null && MinecraftClient.getInstance().currentScreen == screen) {
-            drop.run();
+        var interior = interiors.get(active);
+        if (interior == null) {
+            return "";
         }
+        return interior.itemAt(x, y);
     }
 
     public boolean scroll(double x, double y, double amount) {
@@ -482,21 +742,22 @@ public final class StationPanel {
     }
 
     public boolean key(int key, int scan, int modifiers) {
+        // 旋转键沿用 BS3D 配置，只有选中物品时消费输入。
         if (!enabled()) {
             return false;
         }
         if (key == GLFW.GLFW_KEY_ESCAPE
                 || MinecraftClient.getInstance().options.inventoryKey.matchesKey(key, scan)) {
-            addon.cancel(screen);
             resetCapture();
             return false;
         }
         // 只有光标携物且鼠标位于内景时消费 R/T，不能抢走铁砧重命名框的文字输入。
         if (!active.isEmpty()
                 && viewport().contains(mouseX, mouseY)
-                && !screen.getScreenHandler().getCursorStack().isEmpty()) {
-            boolean yaw = volume.rotateYaw().matchesKey(key, scan);
-            boolean pitch = volume.rotatePitch().matchesKey(key, scan);
+                && (selection != null || !screen.getScreenHandler().getCursorStack().isEmpty())) {
+            var pressedKey = InputUtil.fromKeyCode(key, scan);
+            boolean yaw = volume.rotateYaw().equals(pressedKey);
+            boolean pitch = volume.rotatePitch().equals(pressedKey);
             if (yaw || pitch) {
                 orientation =
                         OrthogonalRotation.turn(
@@ -508,17 +769,17 @@ public final class StationPanel {
     }
 
     public void removed() {
-        addon.cancel(screen);
+        // 页面关闭立即释放地面访问，不让已消失的模型继续占用其他玩家的租约。
+        volume.closeGround("");
         resetCapture();
     }
 
     private void resetCapture() {
-        // 一并清掉旋转、滑块和排队落点，窗口消失后不能沿用旧命中。
-        ownPickup = false;
+        // 一并清掉旋转、滑块和本地选择，窗口消失后不能沿用旧命中。
+        selection = null;
         rotatingPlayer = false;
         rotatingInterior = false;
         sliding = false;
-        queuedDrop = null;
     }
 
     private ItemStack hovered(double x, double y) {

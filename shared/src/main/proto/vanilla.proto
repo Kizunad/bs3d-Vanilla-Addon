@@ -5,6 +5,7 @@ option java_outer_classname = "VanillaProtocol";
 
 // C2S：订阅当前连接自己的原版页面。没有选择其他玩家或远程方块的入口。
 message SubscribeRequest {}
+message OpenSceneRequest {}
 message ActionRequest {
   string menu = 1; // 服务端每次打开页面生成的新 UUID，不等同于可循环复用的 sync_id。
   string operation = 2; // 本连接内幂等 UUID；相同操作号不得更换参数。
@@ -16,14 +17,35 @@ message ActionRequest {
     BagDestination store_cursor = 7;
     PlayerSlot player_slot = 8;
     string cancel_operation = 9;
+    DragTransfer transfer = 10; // 松开时一次提交来源与落点，拒绝时保留来源。
+    OpenSceneRequest open_scene = 11; // 授权当前距离内可见的地面容器模型。
   }
 }
 message BagDestination {
-  string container = 1; // 随身容器实例 UUID，不是物品类型 ID。
+  string container = 1; // 当前已授权的随身或地面容器实例 UUID，不是物品类型 ID。
   int32 x = 2;
   int32 y = 3; // 从底部向上的格坐标。
   int32 z = 4;
   uint32 orientation = 5; // BS3D OrthogonalRotation 的 0..23 索引。
+  bool auto_place = 6; // 模型落点或 Shift 搬运使用完整容量自动寻位。
+}
+message MenuSlot {
+  int32 slot = 1; // 当前 ScreenHandler 的 slot.id。
+  bytes fingerprint = 2;
+}
+message DragTransfer {
+  oneof source {
+    string item = 1;
+    PlayerSlot body = 2;
+    MenuSlot slot = 3;
+    bool cursor = 4;
+  }
+  oneof target {
+    BagDestination bag = 5;
+    MenuSlot destination = 6;
+    PlayerSlot body_destination = 7;
+    bool player_inventory = 8;
+  }
 }
 message PlayerSlot {
   int32 slot = 1; // PlayerInventory 槽号；只允许当前主手、副手和盔甲。
@@ -32,18 +54,19 @@ message PlayerSlot {
 enum Status {
   CLOSED = 0;
   READY = 1;
-  RUNNING = 2;
+  reserved 2;
+  reserved "RUNNING";
   COMPLETED = 3;
   REJECTED = 4;
   CANCELLED = 5;
 }
-// S2C：只描述附属会话及进度。原版槽位、光标、燃烧进度仍走原版同步。
+// S2C：只描述附属会话及终态。原版槽位、光标、燃烧进度仍走原版同步。
 message MenuState {
   string menu = 1;
   int32 sync_id = 2;
   string operation = 3;
   Status status = 4;
-  int32 elapsed_ticks = 5;
-  int32 duration_ticks = 6;
+  reserved 5, 6;
+  reserved "elapsed_ticks", "duration_ticks";
   string detail = 7;
 }
