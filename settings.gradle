@@ -5,5 +5,12 @@ pluginManagement {
         mavenCentral()
     }
 }
+// 相邻仓库位置、产物路径与第三方版本都由 Framework 的工作区脚本提供（kizunaWorkspace、libs）。
+apply from: new File(rootDir.parentFile, 'Kizuna-Meridian-Mod-Framework/scripts/workspace.gradle')
+
 rootProject.name = 'bs3d-vanilla-addon'
 include 'client', 'server'
+
+// Inventory UI Framework 与 BS3D 尚无发布坐标；按清单目录组合其独立仓库，相关工程随本仓构建先行编译。
+kizunaWorkspace.includeSource('inventory-ui', ['': 'local.inventory-ui:client', server: 'local.inventory-ui:server'])
+kizunaWorkspace.includeSource('bs3d', [client: 'local.bs3d:client', server: 'local.bs3d:server'])

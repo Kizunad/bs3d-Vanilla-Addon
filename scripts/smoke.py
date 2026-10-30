@@ -92,7 +92,8 @@ def run_mode(command, mode, run_id, port):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--java-home", type=Path, default=Path("/usr/lib/jvm/java-17-openjdk-amd64"))
+    parser.add_argument("--java-home", type=Path,
+                        help="运行 Gradle 的 JDK；Loom 1.13 起须为 Java 21，省略时沿用当前环境")
     parser.add_argument("--mode", choices=["both", "dedicated", "integrated"], default="both")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help="独服验收端口；已占用时使用其他端口，不处理现有服务器")
@@ -100,8 +101,9 @@ def main():
     if not 1 <= args.port <= MAX_PORT:
         parser.error("--port 必须位于 1..65535")
     # 不复用外部 Gradle 守护进程，让游戏子进程始终属于本次可回收的进程组。
-    command = [str(ROOT / "gradlew"), "--offline", "--no-daemon", "--console=plain",
-               f"-Dorg.gradle.java.home={args.java_home}"]
+    command = [str(ROOT / "gradlew"), "--offline", "--no-daemon", "--console=plain"]
+    if args.java_home:
+        command.append(f"-Dorg.gradle.java.home={args.java_home}")
     run_id = uuid.uuid4().hex[:12]
     modes = ("dedicated", "integrated") if args.mode == "both" else (args.mode,)
     for mode in modes:

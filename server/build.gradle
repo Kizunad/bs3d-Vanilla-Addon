@@ -1,7 +1,8 @@
 dependencies {
-    modImplementation files(new File(rootProject.frameworkDir, 'server/build/libs/kizuna-inventory-ui-framework-server-0.1.0-SNAPSHOT.jar'))
-    modImplementation files(new File(rootProject.bs3dDir, 'server/build/libs/backpack-storage-3d-server-0.1.0-SNAPSHOT.jar'))
-    testImplementation 'net.fabricmc:fabric-loader-junit:0.16.10'
+    // 与 client 相同，组合工程取 named 开发 JAR，避免 mod 重映射缓存滞后于上游源码。
+    implementation('local.inventory-ui:server') { targetConfiguration = 'namedElements' }
+    implementation('local.bs3d:server') { targetConfiguration = 'namedElements' }
+    testImplementation libs.fabric.junit
 }
 test { systemProperty 'fabric.side', 'server' }
 loom.runs {

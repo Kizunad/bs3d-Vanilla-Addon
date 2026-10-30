@@ -2,14 +2,15 @@
 sourceSets.main.java.srcDir rootProject.file('server/src/main/java')
 
 dependencies {
-    modImplementation files(new File(rootProject.frameworkDir, 'build/libs/kizuna-inventory-ui-framework-0.1.0-SNAPSHOT.jar'))
-    modImplementation files(new File(rootProject.bs3dDir, 'client/build/libs/backpack-storage-3d-client-0.1.0-SNAPSHOT.jar'))
-    modImplementation files(new File(rootProject.frameworkDir, 'server/build/libs/kizuna-inventory-ui-framework-server-0.1.0-SNAPSHOT.jar'))
-    modImplementation files(new File(rootProject.bs3dDir, 'server/build/libs/backpack-storage-3d-server-0.1.0-SNAPSHOT.jar'))
-    modImplementation 'io.wispforest:owo-lib:0.11.2+1.20'
+    // 组合进来的 Loom 工程直接取 named 开发 JAR：按坐标走 mod 重映射的缓存不随上游改动刷新，也不会先构建上游。
+    implementation('local.inventory-ui:client') { targetConfiguration = 'namedElements' }
+    implementation('local.bs3d:client') { targetConfiguration = 'namedElements' }
+    implementation('local.inventory-ui:server') { targetConfiguration = 'namedElements' }
+    implementation('local.bs3d:server') { targetConfiguration = 'namedElements' }
+    modImplementation libs.owo
     // 本地 runSmoke 使用 BS3D 的源码编译依赖解析；生产端仍由 BS3D JAR 内嵌。
-    implementation 'org.tomlj:tomlj:1.1.1'
-    implementation 'org.antlr:antlr4-runtime:4.11.1'
+    implementation libs.tomlj
+    implementation libs.antlr.runtime
 }
 loom.runs {
     smoke {
