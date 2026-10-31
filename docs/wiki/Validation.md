@@ -10,7 +10,7 @@
 - 本地光标携物时，点人物部位改为点击隐藏的原版装备槽，走原版创造写入。
 - 点背包模型或内景只在本地提示；在场景内松开不会被当作丢出；这期间也不发送场景请求。
 
-`StationPanel` 还有一处对所有页面生效：原地点一下槽位，改为经页面自身的 `onMouseClick` 发出。普通页面最后调用的仍是同一个 `clickSlot`。
+`StationPanel` 还有一处对所有页面生效：原地点一下槽位，改为经页面自身的 `slotClicked` 发出。普通页面最后调用的仍是同一个 `handleInventoryMouseClick`。
 
 Java 17 离线 `test build :client:compileSmokeJava :server:compileSmokeJava` 通过，**5 项测试**无失败或跳过。日志为远程会话仓库的 `handoff/logs/bs3d-pocket-creative-vanilla-test-build.log`。
 
