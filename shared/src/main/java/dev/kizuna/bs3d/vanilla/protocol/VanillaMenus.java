@@ -1,43 +1,42 @@
 package dev.kizuna.bs3d.vanilla.protocol;
 
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.PlayerScreenHandler;
-import net.minecraft.screen.ScreenHandlerType;
-
 import java.util.Set;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.inventory.MenuType;
 
 /** 显式列出适配的原版菜单，第三方菜单保留自己的布局和交互。 */
 public final class VanillaMenus {
-    private static final Set<ScreenHandlerType<?>> TYPES =
+    private static final Set<MenuType<?>> TYPES =
             Set.of(
-                    ScreenHandlerType.CRAFTING,
-                    ScreenHandlerType.FURNACE,
-                    ScreenHandlerType.BLAST_FURNACE,
-                    ScreenHandlerType.SMOKER,
-                    ScreenHandlerType.ANVIL,
-                    ScreenHandlerType.SMITHING,
-                    ScreenHandlerType.GRINDSTONE,
-                    ScreenHandlerType.STONECUTTER,
-                    ScreenHandlerType.LOOM,
-                    ScreenHandlerType.CARTOGRAPHY_TABLE,
-                    ScreenHandlerType.ENCHANTMENT,
-                    ScreenHandlerType.BREWING_STAND,
-                    ScreenHandlerType.BEACON,
-                    ScreenHandlerType.GENERIC_9X1,
-                    ScreenHandlerType.GENERIC_9X2,
-                    ScreenHandlerType.GENERIC_9X3,
-                    ScreenHandlerType.GENERIC_9X4,
-                    ScreenHandlerType.GENERIC_9X5,
-                    ScreenHandlerType.GENERIC_9X6,
-                    ScreenHandlerType.GENERIC_3X3,
-                    ScreenHandlerType.HOPPER,
-                    ScreenHandlerType.SHULKER_BOX);
+                    MenuType.CRAFTING,
+                    MenuType.FURNACE,
+                    MenuType.BLAST_FURNACE,
+                    MenuType.SMOKER,
+                    MenuType.ANVIL,
+                    MenuType.SMITHING,
+                    MenuType.GRINDSTONE,
+                    MenuType.STONECUTTER,
+                    MenuType.LOOM,
+                    MenuType.CARTOGRAPHY_TABLE,
+                    MenuType.ENCHANTMENT,
+                    MenuType.BREWING_STAND,
+                    MenuType.BEACON,
+                    MenuType.GENERIC_9x1,
+                    MenuType.GENERIC_9x2,
+                    MenuType.GENERIC_9x3,
+                    MenuType.GENERIC_9x4,
+                    MenuType.GENERIC_9x5,
+                    MenuType.GENERIC_9x6,
+                    MenuType.GENERIC_3x3,
+                    MenuType.HOPPER,
+                    MenuType.SHULKER_BOX);
 
     private VanillaMenus() {}
 
-    public static boolean supports(ScreenHandler handler) {
+    public static boolean supports(AbstractContainerMenu handler) {
         // 玩家背包复用同一场景与事务，E 页和工作站页使用相同拖放规则。
-        if (handler instanceof PlayerScreenHandler) {
+        if (handler instanceof InventoryMenu) {
             return true;
         }
         try {

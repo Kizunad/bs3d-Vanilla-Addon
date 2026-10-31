@@ -15,30 +15,28 @@ import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.SubscribeRequest;
 import dev.kizuna.inventoryui.server.ServerConnection;
 import dev.kizuna.inventoryui.server.ServerModuleSession;
 import dev.kizuna.inventoryui.server.ServerRequest;
-
-import net.minecraft.registry.Registries;
-import net.minecraft.item.ItemStack;
-import net.minecraft.screen.ScreenHandler;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.sound.SoundCategory;
-import net.minecraft.util.Identifier;
-
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.ItemStack;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
 /** 页面身份和幂等收据均属于本连接；请求不能访问未打开的方块。 */
-final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
+final class MenuSession implements ServerModuleSession<ServerPlayer> {
     private static final int RECEIPT_LIMIT = 128;
     private final MinecraftServer server;
-    private final ServerConnection<ServerPlayerEntity> connection;
+    private final ServerConnection<ServerPlayer> connection;
     private final Map<String, Receipt> receipts = new LinkedHashMap<>();
-    private ScreenHandler handler;
+    private AbstractContainerMenu handler;
     private String menu = "";
     private boolean subscribed;
 
-    MenuSession(MinecraftServer server, ServerConnection<ServerPlayerEntity> connection) {
+    MenuSession(MinecraftServer server, ServerConnection<ServerPlayer> connection) {
         this.server = server;
         this.connection = connection;
     }
@@ -48,7 +46,7 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
     }
 
     @Override
-    public boolean handle(ServerRequest<ServerPlayerEntity> request) {
+    public boolean handle(ServerRequest<ServerPlayer> request) {
         // Framework 已认证连接身份；业务层仍需确认消息形状与当前原版页面。
         if (request.message().equals(VanillaMessages.SUBSCRIBE)) {
             return subscribe(request);
@@ -79,7 +77,7 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
             execute(action);
         } catch (IllegalArgumentException invalid) {
             // 原版全量同步纠正客户端光标预测；失败说明只发给这条已认证连接。
-            connection.context().currentScreenHandler.syncState();
+            connection.context().containerMenu.sendAllDataToRemote();
             if (receipts.containsKey(action.getOperation())) {
                 publish(state(action.getOperation(), Status.REJECTED, invalid.getMessage()));
             } else {
@@ -89,7 +87,7 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
         return true;
     }
 
-    private boolean subscribe(ServerRequest<ServerPlayerEntity> request) {
+    private boolean subscribe(ServerRequest<ServerPlayer> request) {
         // 订阅只建立页面生命周期，地面模型在实际打开场景时授权。
         var subscription = request.payload(SubscribeRequest.getDefaultInstance());
         if (!subscription.getUnknownFields().asMap().isEmpty()) {
@@ -115,8 +113,8 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
         }
         if (action.hasPlayerSlot()) {
             PlayerCursor.click(connection.context(), action.getPlayerSlot());
-            handler.syncState();
-            connection.context().playerScreenHandler.sendContentUpdates();
+            handler.sendAllDataToRemote();
+            connection.context().inventoryMenu.broadcastChanges();
             finish(action, Status.COMPLETED, "");
             return;
         }
@@ -138,11 +136,11 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
         // syncId 会复用，因此同时验证服务端新生成的页面 UUID。
         if (handler == null
                 || !action.getMenu().equals(menu)
-                || action.getSyncId() != handler.syncId) {
+                || action.getSyncId() != handler.containerId) {
             throw new IllegalArgumentException("页面已关闭或更换");
         }
         var player = connection.context();
-        if (!player.isAlive() || player.isSpectator() || !handler.canUse(player)) {
+        if (!player.isAlive() || player.isSpectator() || !handler.stillValid(player)) {
             throw new IllegalArgumentException("玩家或容器当前不可用");
         }
         if (!TransferService.validId(action.getOperation())) {
@@ -167,7 +165,7 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
 
     private void requireCursor(ActionRequest action) {
         // 指纹来自真实光标，而不是客户端声明的物品类型或数量。
-        var fingerprint = StackCodec.fingerprint(handler.getCursorStack());
+        var fingerprint = StackCodec.fingerprint(handler.getCarried());
         if (!fingerprint.equals(action.getCursorFingerprint())) {
             throw new IllegalArgumentException("光标物品已变化，请重试");
         }
@@ -202,18 +200,18 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
     private void playCompletion(ItemStack stack) {
         // 每个成功的新操作只播放一次材质声；幂等重试只重发收据。
         var material = VolumeServer.RULES.material(stack);
-        var sound = Registries.SOUND_EVENT.get(new Identifier(material.sound()));
-        connection.context().playSound(sound, SoundCategory.PLAYERS, material.volume(), material.pitch());
+        var sound = BuiltInRegistries.SOUND_EVENT.get(new ResourceLocation(material.sound()));
+        connection.context().playNotifySound(sound, SoundSource.PLAYERS, material.volume(), material.pitch());
     }
 
     private void refreshMenu() {
         // 更换原版页面会失效旧菜单身份和收据，不能重放到新页面。
         var player = connection.context();
-        ScreenHandler next = player.currentScreenHandler;
+        AbstractContainerMenu next = player.containerMenu;
         if (!VanillaMenus.supports(next)
                 || !player.isAlive()
                 || player.isSpectator()
-                || !next.canUse(player)) {
+                || !next.stillValid(player)) {
             next = null;
         }
         if (next == handler) {
@@ -229,7 +227,7 @@ final class MenuSession implements ServerModuleSession<ServerPlayerEntity> {
     private MenuState state(String operation, Status status, String detail) {
         return MenuState.newBuilder()
                 .setMenu(menu)
-                .setSyncId(handler == null ? 0 : handler.syncId)
+                .setSyncId(handler == null ? 0 : handler.containerId)
                 .setOperation(operation)
                 .setStatus(status)
                 .setDetail(detail)

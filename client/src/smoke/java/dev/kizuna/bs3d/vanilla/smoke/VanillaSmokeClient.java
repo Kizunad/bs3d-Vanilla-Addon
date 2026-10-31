@@ -21,26 +21,24 @@ import dev.kizuna.inventoryui.client.InventoryUiClient;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.AccessibilityOnboardingScreen;
-import net.minecraft.client.gui.screen.ConnectScreen;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.client.network.ServerAddress;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.client.util.ScreenshotRecorder;
-import net.minecraft.item.Items;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.resource.DataConfiguration;
-import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
+import net.minecraft.client.gui.screens.AccessibilityOnboardingScreen;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.world.Difficulty;
-import net.minecraft.world.GameMode;
-import net.minecraft.world.GameRules;
-import net.minecraft.world.gen.GeneratorOptions;
-import net.minecraft.world.gen.WorldPresets;
-import net.minecraft.world.level.LevelInfo;
-
+import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.LevelSettings;
+import net.minecraft.world.level.WorldDataConfiguration;
+import net.minecraft.world.level.levelgen.WorldOptions;
+import net.minecraft.world.level.levelgen.presets.WorldPresets;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -48,7 +46,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
-/** 实际网络、原版 ScreenHandler、输入与渲染验收；测试反射只用于获取场景命中点。 */
+/** 实际网络、原版 AbstractContainerMenu、输入与渲染验收；测试反射只用于获取场景命中点。 */
 public final class VanillaSmokeClient implements ClientModInitializer {
     private static final String WORLD = "vanilla-smoke";
     private static final long TIMEOUT_MILLIS = 240_000;
@@ -102,7 +100,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
     }
 
-    private void tick(MinecraftClient client) {
+    private void tick(Minecraft client) {
         // 每阶段等真实状态后再推进，失败日志保留具体阶段和服务端业务说明。
         if (started == 0) {
             started = System.currentTimeMillis();
@@ -123,53 +121,53 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                             + " protocol="
                             + InventoryUiClient.runtime().protocolError());
         }
-        if (client.currentScreen instanceof AccessibilityOnboardingScreen) {
+        if (client.screen instanceof AccessibilityOnboardingScreen) {
             client.setScreen(new TitleScreen());
         }
         if (stage == Stage.CONNECT
-                && client.currentScreen instanceof TitleScreen
+                && client.screen instanceof TitleScreen
                 && client.getOverlay() == null) {
             stage = Stage.INITIAL;
             if (integrated) {
                 var info =
-                        new LevelInfo(
+                        new LevelSettings(
                                 WORLD,
-                                GameMode.SURVIVAL,
+                                GameType.SURVIVAL,
                                 false,
                                 Difficulty.PEACEFUL,
                                 true,
                                 new GameRules(),
-                                DataConfiguration.SAFE_MODE);
-                client.createIntegratedServerLoader()
-                        .createAndStart(
+                                WorldDataConfiguration.DEFAULT);
+                client.createWorldOpenFlows()
+                        .createFreshLevel(
                                 WORLD,
                                 info,
-                                new GeneratorOptions(1L, false, false),
+                                new WorldOptions(1L, false, false),
                                 registry ->
-                                        registry.get(RegistryKeys.WORLD_PRESET)
+                                        registry.registryOrThrow(Registries.WORLD_PRESET)
                                                 .getOrThrow(WorldPresets.FLAT)
-                                                .createDimensionsRegistryHolder());
+                                                .createWorldDimensions());
             } else {
                 String address = System.getProperty("vanilla.smoke.address", "127.0.0.1:25584");
-                ConnectScreen.connect(
+                ConnectScreen.startConnecting(
                         new TitleScreen(),
                         client,
-                        ServerAddress.parse(address),
-                        new ServerInfo("Vanilla smoke", address, false),
+                        ServerAddress.parseString(address),
+                        new ServerData("Vanilla smoke", address, false),
                         false);
             }
         }
         if (stage == Stage.RESTART && client.player == null && client.getOverlay() == null) {
             stage = Stage.RESTORED;
-            client.createIntegratedServerLoader().start(new TitleScreen(), WORLD);
+            client.createWorldOpenFlows().loadLevel(new TitleScreen(), WORLD);
             return;
         }
         if (client.player == null || addon == null || !addon.volume().ready()) {
             return;
         }
-        client.getToastManager().clear();
+        client.getToasts().clear();
         var volume = addon.volume();
-        var screen = client.currentScreen instanceof HandledScreen<?> handled ? handled : null;
+        var screen = client.screen instanceof AbstractContainerScreen<?> handled ? handled : null;
         boolean ready =
                 screen != null
                         && addon.ready(screen)
@@ -179,7 +177,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                 if (volume.state().getRevision() != 1) {
                     return;
                 }
-                require(integrated == client.isInSingleplayer(), "运行模式错误");
+                require(integrated == client.isLocalServer(), "运行模式错误");
                 bag =
                         volume.state().getContainersList().stream()
                                 .filter(Container::getWorn)
@@ -200,38 +198,38 @@ public final class VanillaSmokeClient implements ClientModInitializer {
             }
             case HAND_PLACED -> {
                 if (addon.busy()
-                        || screen.getScreenHandler().getSlot(1).getStack().getCount() != 2) {
+                        || screen.getMenu().getSlot(1).getItem().getCount() != 2) {
                     return;
                 }
                 // 槽位点击有客户端预测，配方结果必须等服务端同步，不能把预测当完成。
-                if (screen.getScreenHandler().getSlot(0).getStack().isEmpty()) {
+                if (screen.getMenu().getSlot(0).getItem().isEmpty()) {
                     return;
                 }
-                require(client.player.getMainHandStack().isEmpty(), "拖动后主手没有清空");
+                require(client.player.getMainHandItem().isEmpty(), "拖动后主手没有清空");
                 require(
-                        screen.getScreenHandler().getSlot(0).getStack().isOf(Items.IRON_NUGGET),
+                        screen.getMenu().getSlot(0).getItem().is(Items.IRON_NUGGET),
                         "原版配方没有计算结果");
-                nativeClick(client, screen, 0, SlotActionType.PICKUP);
+                nativeClick(client, screen, 0, ClickType.PICKUP);
                 stage = Stage.CRAFTED;
             }
             case CRAFTED -> {
-                var cursor = screen.getScreenHandler().getCursorStack();
-                if (!cursor.isOf(Items.IRON_NUGGET)) {
+                var cursor = screen.getMenu().getCarried();
+                if (!cursor.is(Items.IRON_NUGGET)) {
                     return;
                 }
                 require(cursor.getCount() == 9, "原版合成结果数量错误");
                 require(
-                        screen.getScreenHandler().getSlot(1).getStack().getCount() == 1,
+                        screen.getMenu().getSlot(1).getItem().getCount() == 1,
                         "原版合成没有正确扣料");
                 clickBody(addon, screen, 40);
                 stage = Stage.OFFHAND;
             }
             case OFFHAND -> {
-                if (addon.busy() || !client.player.getOffHandStack().isOf(Items.IRON_NUGGET)) {
+                if (addon.busy() || !client.player.getOffhandItem().is(Items.IRON_NUGGET)) {
                     return;
                 }
-                require(client.player.getOffHandStack().getCount() == 9, "合成物没有放入副手");
-                nativeClick(client, screen, 1, SlotActionType.QUICK_MOVE);
+                require(client.player.getOffhandItem().getCount() == 9, "合成物没有放入副手");
+                nativeClick(client, screen, 1, ClickType.QUICK_MOVE);
                 settle = 0;
                 stage = Stage.BAG_SETTLE;
             }
@@ -248,12 +246,12 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                     return;
                 }
                 require(volume.state().getRevision() == 1, "拒绝结果槽位改变了背包");
-                require(screen.getScreenHandler().getCursorStack().isEmpty(), "拒绝结果槽位改变了光标");
+                require(screen.getMenu().getCarried().isEmpty(), "拒绝结果槽位改变了光标");
                 screen.keyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE, 0, 0);
                 stage = Stage.REOPEN;
             }
             case REOPEN -> {
-                if (client.currentScreen != null || addon.state().getSyncId() != 0) {
+                if (client.screen != null || addon.state().getSyncId() != 0) {
                     return;
                 }
                 require(volume.state().getRevision() == 1, "ESC 关闭改变了被拒绝的库存");
@@ -278,22 +276,22 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                 if (addon.busy() || volume.state().getRevision() != 2) {
                     return;
                 }
-                var logs = screen.getScreenHandler().getSlot(1).getStack();
-                if (!logs.isOf(Items.OAK_LOG)) {
+                var logs = screen.getMenu().getSlot(1).getItem();
+                if (!logs.is(Items.OAK_LOG)) {
                     return;
                 }
-                if (!screen.getScreenHandler().getSlot(0).getStack().isOf(Items.OAK_PLANKS)) {
+                if (!screen.getMenu().getSlot(0).getItem().is(Items.OAK_PLANKS)) {
                     return;
                 }
                 require(logs.getCount() == 4, "背包拖放丢失物品");
-                nativeClick(client, screen, 0, SlotActionType.PICKUP);
+                nativeClick(client, screen, 0, ClickType.PICKUP);
                 stage = Stage.PLANKS_CURSOR;
             }
             case PLANKS_CURSOR -> {
-                if (!screen.getScreenHandler().getCursorStack().isOf(Items.OAK_PLANKS)) {
+                if (!screen.getMenu().getCarried().is(Items.OAK_PLANKS)) {
                     return;
                 }
-                require(screen.getScreenHandler().getCursorStack().getCount() == 4, "原版木板配方结果错误");
+                require(screen.getMenu().getCarried().getCount() == 4, "原版木板配方结果错误");
                 addon.action(
                         screen,
                         request -> {
@@ -306,7 +304,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                 if (addon.busy() || volume.state().getRevision() != 3) {
                     return;
                 }
-                require(screen.getScreenHandler().getCursorStack().isEmpty(), "存入没有清空光标");
+                require(screen.getMenu().getCarried().isEmpty(), "存入没有清空光标");
                 replay =
                         InventoryUiClient.runtime()
                                 .protocol()
@@ -372,61 +370,61 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                 }
                 require(addon.state().getStatus() == Status.REJECTED, "接受了未知业务字段");
                 require(volume.state().getRevision() == 3, "非法请求改变了背包");
-                screen.close();
+                screen.onClose();
                 command(client, "furnace");
                 stage = Stage.FURNACE;
             }
             case FURNACE -> {
                 if (!ready
-                        || !screen.getScreenHandler()
+                        || !screen.getMenu()
                                 .getSlot(2)
-                                .getStack()
-                                .isOf(Items.IRON_INGOT)) {
+                                .getItem()
+                                .is(Items.IRON_INGOT)) {
                     return;
                 }
                 screenshot(client, "furnace.png");
-                nativeClick(client, screen, 2, SlotActionType.PICKUP);
+                nativeClick(client, screen, 2, ClickType.PICKUP);
                 stage = Stage.FURNACE_CURSOR;
             }
             case FURNACE_CURSOR -> {
-                if (!screen.getScreenHandler().getCursorStack().isOf(Items.IRON_INGOT)) {
+                if (!screen.getMenu().getCarried().is(Items.IRON_INGOT)) {
                     return;
                 }
-                clickBody(addon, screen, client.player.getInventory().selectedSlot);
+                clickBody(addon, screen, client.player.getInventory().selected);
                 stage = Stage.FURNACE_HAND;
             }
             case FURNACE_HAND -> {
                 if (addon.busy()) {
                     return;
                 }
-                require(client.player.getMainHandStack().isOf(Items.IRON_INGOT), "熔炉产出未进入主手");
+                require(client.player.getMainHandItem().is(Items.IRON_INGOT), "熔炉产出未进入主手");
                 // 原版左键会交换已占用的主手；把换出的木头放回真实空槽，再继续开箱。
-                if (!screen.getScreenHandler().getCursorStack().isEmpty()) {
+                if (!screen.getMenu().getCarried().isEmpty()) {
                     var empty =
-                            screen.getScreenHandler().slots.stream()
+                            screen.getMenu().slots.stream()
                                     .filter(
                                             slot ->
-                                                    slot.inventory == client.player.getInventory()
-                                                            && !slot.hasStack())
+                                                    slot.container == client.player.getInventory()
+                                                            && !slot.hasItem())
                                     .findFirst()
                                     .orElseThrow();
-                    nativeClick(client, screen, empty.id, SlotActionType.PICKUP);
+                    nativeClick(client, screen, empty.index, ClickType.PICKUP);
                     return;
                 }
-                screen.close();
+                screen.onClose();
                 command(client, "chest");
                 stage = Stage.CHEST;
             }
             case CHEST -> {
-                if (!ready || !screen.getScreenHandler().getSlot(0).getStack().isOf(Items.STONE)) {
+                if (!ready || !screen.getMenu().getSlot(0).getItem().is(Items.STONE)) {
                     return;
                 }
                 panel(screen).open(bag);
-                nativeClick(client, screen, 0, SlotActionType.PICKUP);
+                nativeClick(client, screen, 0, ClickType.PICKUP);
                 stage = Stage.CHEST_CURSOR;
             }
             case CHEST_CURSOR -> {
-                if (!screen.getScreenHandler().getCursorStack().isOf(Items.STONE)) {
+                if (!screen.getMenu().getCarried().is(Items.STONE)) {
                     return;
                 }
                 addon.action(screen, request -> request.setStoreCursor(destination(bag, 1)));
@@ -436,8 +434,8 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                 if (addon.busy() || volume.state().getRevision() != 4) {
                     return;
                 }
-                require(screen.getScreenHandler().getSlot(0).getStack().isEmpty(), "箱子来源未清空");
-                require(screen.getScreenHandler().getCursorStack().isEmpty(), "箱子物品未存回背包");
+                require(screen.getMenu().getSlot(0).getItem().isEmpty(), "箱子来源未清空");
+                require(screen.getMenu().getCarried().isEmpty(), "箱子物品未存回背包");
                 requireStored(volume);
                 screenshot(client, "chest.png");
                 stage = Stage.INSTANT_INPUTS;
@@ -448,7 +446,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                 }
                 requireStored(volume);
                 screenshot(client, "instant-ground-model.png");
-                screen.close();
+                screen.onClose();
                 settle = 0;
                 stage = Stage.SAVING;
             }
@@ -492,18 +490,18 @@ public final class VanillaSmokeClient implements ClientModInitializer {
         int stone = 0;
         for (var item : volume.state().getItemsList()) {
             var stack = volume.stack(item.getId());
-            if (stack.isOf(Items.OAK_PLANKS)) {
+            if (stack.is(Items.OAK_PLANKS)) {
                 planks += stack.getCount();
             }
-            if (stack.isOf(Items.STONE)) {
+            if (stack.is(Items.STONE)) {
                 stone += stack.getCount();
             }
         }
         require(planks == 4 && stone == 5, "背包最终内容错误");
     }
 
-    private static void clickBody(VanillaClient addon, HandledScreen<?> screen, int slot) {
-        var stack = MinecraftClient.getInstance().player.getInventory().getStack(slot);
+    private static void clickBody(VanillaClient addon, AbstractContainerScreen<?> screen, int slot) {
+        var stack = Minecraft.getInstance().player.getInventory().getItem(slot);
         addon.action(
                 screen,
                 request ->
@@ -513,7 +511,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                                         .setFingerprint(StackCodec.fingerprint(stack))));
     }
 
-    private static void dragHand(HandledScreen<?> screen, int playerSlot, int target) {
+    private static void dragHand(AbstractContainerScreen<?> screen, int playerSlot, int target) {
         WornPreview preview = readField(panel(screen), "player");
         var box = preview.slotBounds(playerSlot);
         require(box != null, "玩家部位没有投影");
@@ -528,7 +526,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
         throw new IllegalStateException("没有可命中的手部像素");
     }
 
-    private static void dragBag(HandledScreen<?> screen, int target, String bag) {
+    private static void dragBag(AbstractContainerScreen<?> screen, int target, String bag) {
         Map<String, InteriorRenderer> interiors = readField(panel(screen), "interiors");
         var interior = interiors.get(bag);
         require(interior != null, "内景尚未渲染");
@@ -551,10 +549,10 @@ public final class VanillaSmokeClient implements ClientModInitializer {
         throw new IllegalStateException("内景物品没有可命中像素");
     }
 
-    private static void drag(HandledScreen<?> screen, double x, double y, int target) {
+    private static void drag(AbstractContainerScreen<?> screen, double x, double y, int target) {
         // 经过真实 Screen 输入入口，验证 Mixin 捕获和异步完成后的落点投递。
         var host = (StationHost) screen;
-        var slot = screen.getScreenHandler().getSlot(target);
+        var slot = screen.getMenu().getSlot(target);
         double endX = host.stationLeft() + slot.x + 8;
         double endY = host.stationTop() + slot.y + 8;
         screen.mouseClicked(x, y, 0);
@@ -574,41 +572,41 @@ public final class VanillaSmokeClient implements ClientModInitializer {
         }
     }
 
-    private static StationPanel panel(HandledScreen<?> screen) {
+    private static StationPanel panel(AbstractContainerScreen<?> screen) {
         return ((StationHost) screen).stationPanel();
     }
 
     private static void nativeClick(
-            MinecraftClient client, HandledScreen<?> screen, int slot, SlotActionType type) {
-        client.interactionManager.clickSlot(
-                screen.getScreenHandler().syncId, slot, 0, type, client.player);
+            Minecraft client, AbstractContainerScreen<?> screen, int slot, ClickType type) {
+        client.gameMode.handleInventoryMouseClick(
+                screen.getMenu().containerId, slot, 0, type, client.player);
     }
 
-    private static void command(MinecraftClient client, String name) {
-        client.getNetworkHandler().sendChatCommand("vanilla-fixture " + name);
+    private static void command(Minecraft client, String name) {
+        client.getConnection().sendCommand("vanilla-fixture " + name);
     }
 
-    private static void screenshot(MinecraftClient client, String name) {
-        ScreenshotRecorder.saveScreenshot(
-                client.runDirectory, name, client.getFramebuffer(), message -> {});
+    private static void screenshot(Minecraft client, String name) {
+        Screenshot.grab(
+                client.gameDirectory, name, client.getMainRenderTarget(), message -> {});
     }
 
-    private void finish(MinecraftClient client, String result) {
+    private void finish(Minecraft client, String result) {
         try {
-            Files.writeString(client.runDirectory.toPath().resolve("vanilla-ok.txt"), result);
+            Files.writeString(client.gameDirectory.toPath().resolve("vanilla-ok.txt"), result);
         } catch (IOException failure) {
             throw new UncheckedIOException(failure);
         }
         stage = Stage.FINISHED;
         disconnect(client);
-        client.scheduleStop();
+        client.stop();
     }
 
-    private static void disconnect(MinecraftClient client) {
-        if (client.world != null) {
-            client.world.disconnect();
+    private static void disconnect(Minecraft client) {
+        if (client.level != null) {
+            client.level.disconnect();
         }
-        client.disconnect(new TitleScreen());
+        client.clearLevel(new TitleScreen());
     }
 
     private static void require(boolean condition, String reason) {

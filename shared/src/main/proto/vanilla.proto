@@ -30,7 +30,7 @@ message BagDestination {
   bool auto_place = 6; // 模型落点或 Shift 搬运使用完整容量自动寻位。
 }
 message MenuSlot {
-  int32 slot = 1; // 当前 ScreenHandler 的 slot.id。
+  int32 slot = 1; // 当前 AbstractContainerMenu 的 slot.id。
   bytes fingerprint = 2;
 }
 message DragTransfer {
@@ -48,7 +48,7 @@ message DragTransfer {
   }
 }
 message PlayerSlot {
-  int32 slot = 1; // PlayerInventory 槽号；只允许当前主手、副手和盔甲。
+  int32 slot = 1; // Inventory 槽号；只允许当前主手、副手和盔甲。
   bytes fingerprint = 2;
 }
 enum Status {

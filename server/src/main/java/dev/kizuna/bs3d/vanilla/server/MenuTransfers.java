@@ -15,13 +15,12 @@ import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.BagDestination;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.DragTransfer;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.MenuSlot;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.PlayerSlot;
-import net.minecraft.item.ItemStack;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.Slot;
-import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.server.network.ServerPlayerEntity;
-
 import java.util.List;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
 
 /** 一次拖放在服务器调用内完成来源、背包交换和原版点击，失败恢复整份库存。 */
 final class MenuTransfers {
@@ -32,9 +31,9 @@ final class MenuTransfers {
         // 事务只使用当前服务器调用的快照，不保存跨 tick 状态。
     }
 
-    static ItemStack apply(ServerPlayerEntity player, ActionRequest action) {
+    static ItemStack apply(ServerPlayer player, ActionRequest action) {
         // 页面与操作身份由会话验证，这里统一验证来源、落点及库存回滚边界。
-        var handler = player.currentScreenHandler;
+        var handler = player.containerMenu;
         long revision = ((PlayerStorage) player).bs3d$getInventory().getRevision();
         if (revision != action.getInventoryRevision()) {
             throw new IllegalArgumentException("背包已变化，请重新选择物品");
@@ -44,12 +43,12 @@ final class MenuTransfers {
         try {
             DragTransfer transfer = action.getTransfer();
             take(player, transfer, action.getInventoryRevision(), transaction);
-            ItemStack moved = handler.getCursorStack().copy();
+            ItemStack moved = handler.getCarried().copy();
             if (moved.isEmpty()) {
                 throw new IllegalArgumentException("来源没有物品");
             }
             put(player, transfer, transaction);
-            if (!handler.getCursorStack().isEmpty()) {
+            if (!handler.getCarried().isEmpty()) {
                 throw new IllegalArgumentException("目标槽位放不下整栈物品");
             }
             transaction.commit();
@@ -58,43 +57,43 @@ final class MenuTransfers {
             restore(player, before);
             throw failure;
         } finally {
-            handler.syncState();
-            player.playerScreenHandler.sendContentUpdates();
+            handler.sendAllDataToRemote();
+            player.inventoryMenu.broadcastChanges();
         }
     }
 
-    private static Snapshot snapshot(ServerPlayerEntity player) {
+    private static Snapshot snapshot(ServerPlayer player) {
         // 所有栈都复制，原版 onSlotClick 对栈的原地修改也可以完整恢复。
         var account = new PlayerAccount(player);
-        var handler = player.currentScreenHandler;
-        List<ItemStack> slots = handler.slots.stream().map(slot -> slot.getStack().copy()).toList();
-        return new Snapshot(account.data(), account.inventory(), slots, handler.getCursorStack().copy());
+        var handler = player.containerMenu;
+        List<ItemStack> slots = handler.slots.stream().map(slot -> slot.getItem().copy()).toList();
+        return new Snapshot(account.data(), account.inventory(), slots, handler.getCarried().copy());
     }
 
-    private static void restore(ServerPlayerEntity player, Snapshot snapshot) {
+    private static void restore(ServerPlayer player, Snapshot snapshot) {
         // 先恢复菜单，再恢复原版玩家槽位，避免菜单中映射的玩家槽互相覆盖。
-        var handler = player.currentScreenHandler;
+        var handler = player.containerMenu;
         for (int index = 0; index < snapshot.menu().size(); index++) {
-            handler.getSlot(index).setStack(snapshot.menu().get(index).copy());
+            handler.getSlot(index).setByPlayer(snapshot.menu().get(index).copy());
         }
         for (int index = 0; index < snapshot.player().size(); index++) {
-            player.getInventory().setStack(index, snapshot.player().get(index).copy());
+            player.getInventory().setItem(index, snapshot.player().get(index).copy());
         }
         ((PlayerStorage) player).bs3d$setInventory(snapshot.data());
-        handler.setCursorStack(snapshot.cursor().copy());
+        handler.setCarried(snapshot.cursor().copy());
     }
 
-    private static void take(ServerPlayerEntity player, DragTransfer transfer, long revision,
+    private static void take(ServerPlayer player, DragTransfer transfer, long revision,
                              InventoryAccess.CursorTransaction transaction) {
         // 非光标来源必须从空光标开始，不能用拖放隐式交换已有光标物品。
-        var handler = player.currentScreenHandler;
+        var handler = player.containerMenu;
         if (transfer.hasCursor()) {
             if (!transfer.getCursor()) {
                 throw new IllegalArgumentException("光标来源无效");
             }
             return;
         }
-        if (!handler.getCursorStack().isEmpty()) {
+        if (!handler.getCarried().isEmpty()) {
             throw new IllegalArgumentException("请先放下光标中的物品");
         }
         switch (transfer.getSourceCase()) {
@@ -105,14 +104,14 @@ final class MenuTransfers {
         }
     }
 
-    private static Slot menuSlot(ScreenHandler handler, MenuSlot request) {
+    private static Slot menuSlot(AbstractContainerMenu handler, MenuSlot request) {
         // 指纹在点击前核对，不能把页面上已经更换的栈误当作原拖动来源或落点。
         int index = request.getSlot();
         if (index < 0 || index >= handler.slots.size()) {
             throw new IllegalArgumentException("原版槽位无效");
         }
         Slot slot = handler.getSlot(index);
-        requireFingerprint(slot.getStack(), request.getFingerprint());
+        requireFingerprint(slot.getItem(), request.getFingerprint());
         return slot;
     }
 
@@ -123,21 +122,21 @@ final class MenuTransfers {
         }
     }
 
-    private static void takeSlot(ServerPlayerEntity player, Slot slot) {
+    private static void takeSlot(ServerPlayer player, Slot slot) {
         // 合成结果、燃料和普通槽位都走原版点击，保留其取出权限与回调。
-        if (!slot.canTakeItems(player) || !slot.hasStack()) {
+        if (!slot.mayPickup(player) || !slot.hasItem()) {
             throw new IllegalArgumentException("这个槽位不能取出物品");
         }
-        player.currentScreenHandler.onSlotClick(slot.id, 0, SlotActionType.PICKUP, player);
+        player.containerMenu.clicked(slot.index, 0, ClickType.PICKUP, player);
     }
 
-    private static void takeBody(ServerPlayerEntity player, PlayerSlot request) {
-        // 玩家模型使用 PlayerInventory 槽号，绑定装备必须先验证卸装权限。
+    private static void takeBody(ServerPlayer player, PlayerSlot request) {
+        // 玩家模型使用 Inventory 槽号，绑定装备必须先验证卸装权限。
         int index = request.getSlot();
-        if (!PlayerSlots.isInteractive(index, player.getInventory().selectedSlot)) {
+        if (!PlayerSlots.isInteractive(index, player.getInventory().selected)) {
             throw new IllegalArgumentException("来源不是当前双手或盔甲");
         }
-        var stack = player.getInventory().getStack(index);
+        var stack = player.getInventory().getItem(index);
         requireFingerprint(stack, request.getFingerprint());
         if (PlayerSlots.bindingLocked(index, stack, player.isCreative())) {
             throw new IllegalArgumentException("绑定诅咒装备不能取下");
@@ -145,7 +144,7 @@ final class MenuTransfers {
         PlayerCursor.click(player, request);
     }
 
-    private static void put(ServerPlayerEntity player, DragTransfer transfer,
+    private static void put(ServerPlayer player, DragTransfer transfer,
                             InventoryAccess.CursorTransaction transaction) {
         // 快捷取出直接复用原版 insertItem；普通落点执行一次原版左键点击。
         switch (transfer.getTargetCase()) {
@@ -153,31 +152,31 @@ final class MenuTransfers {
                 long revision = ((PlayerStorage) player).bs3d$getInventory().getRevision();
                 transaction.exchange(destination(revision, transfer.getBag()));
             }
-            case DESTINATION -> putSlot(player, menuSlot(player.currentScreenHandler, transfer.getDestination()));
+            case DESTINATION -> putSlot(player, menuSlot(player.containerMenu, transfer.getDestination()));
             case BODY_DESTINATION -> PlayerCursor.click(player, transfer.getBodyDestination());
             case PLAYER_INVENTORY -> {
                 if (!transfer.getPlayerInventory()) {
                     throw new IllegalArgumentException("自动取出目标无效");
                 }
-                var cursor = player.currentScreenHandler.getCursorStack();
-                ((ScreenHandlerAccess) player.playerScreenHandler).bs3dVanilla$insertItem(
+                var cursor = player.containerMenu.getCarried();
+                ((ScreenHandlerAccess) player.inventoryMenu).bs3dVanilla$insertItem(
                         cursor, PLAYER_STORAGE_START, PLAYER_STORAGE_END, false /* fromLast */);
             }
             default -> throw new IllegalArgumentException("缺少物品落点");
         }
     }
 
-    private static void putSlot(ServerPlayerEntity player, Slot slot) {
+    private static void putSlot(ServerPlayer player, Slot slot) {
         // 拒绝交换和部分存入，确保整个拖动物品只有一个确定归属。
-        var handler = player.currentScreenHandler;
-        ItemStack cursor = handler.getCursorStack();
-        ItemStack existing = slot.getStack();
-        if (!slot.canInsert(cursor)
-                || !existing.isEmpty() && !ItemStack.canCombine(existing, cursor)
-                || existing.getCount() + cursor.getCount() > slot.getMaxItemCount(cursor)) {
+        var handler = player.containerMenu;
+        ItemStack cursor = handler.getCarried();
+        ItemStack existing = slot.getItem();
+        if (!slot.mayPlace(cursor)
+                || !existing.isEmpty() && !ItemStack.isSameItemSameTags(existing, cursor)
+                || existing.getCount() + cursor.getCount() > slot.getMaxStackSize(cursor)) {
             throw new IllegalArgumentException("目标槽位放不下整栈物品");
         }
-        handler.onSlotClick(slot.id, 0, SlotActionType.PICKUP, player);
+        handler.clicked(slot.index, 0, ClickType.PICKUP, player);
     }
 
     static CursorTransfer.Request destination(long revision, BagDestination destination) {

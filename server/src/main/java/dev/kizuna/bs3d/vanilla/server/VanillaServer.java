@@ -7,8 +7,7 @@ import dev.kizuna.inventoryui.server.fabric.FabricServerModule;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-
+import net.minecraft.server.level.ServerPlayer;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -32,7 +31,7 @@ public final class VanillaServer implements ModInitializer, FabricServerModule {
 
     @Override
     public void register(
-            MinecraftServer server, ServerModuleRegistry<ServerPlayerEntity> registry) {
+            MinecraftServer server, ServerModuleRegistry<ServerPlayer> registry) {
         // 每个 Framework 连接创建独立会话，不能共享玩家的菜单或光标状态。
         registry.register(
                 VanillaMessages.MODULE,

@@ -1,9 +1,8 @@
 package dev.kizuna.bs3d.vanilla.client;
 
 import dev.kizuna.bs3d.vanilla.protocol.VanillaMenus;
-
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.screen.slot.Slot;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.world.inventory.Slot;
 
 /** 读取原版页面的实际布局，不复制各工作站的槽位坐标。 */
 public interface StationHost {
@@ -22,7 +21,7 @@ public interface StationHost {
 
     default StationLayout stationLayout() {
         // 默认场景使用原版工作站两侧，附属可为玩家 E 页提供专用区域。
-        var screen = (HandledScreen<?>) this;
+        var screen = (AbstractContainerScreen<?>) this;
         return StationLayout.beside(screen.width, screen.height, stationLeft(), stationWidth());
     }
 
@@ -33,7 +32,7 @@ public interface StationHost {
 
     default boolean stationSupported() {
         // 默认只接入服务器菜单已适配的页面；客户端专有页面由页面自身声明。
-        return VanillaMenus.supports(((HandledScreen<?>) this).getScreenHandler());
+        return VanillaMenus.supports(((AbstractContainerScreen<?>) this).getMenu());
     }
 
     default boolean stationActive() {

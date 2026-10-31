@@ -12,21 +12,20 @@ import dev.kizuna.backpack3d.server.GroundInventory;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.minecraft.block.Block;
-import net.minecraft.block.Blocks;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.item.ItemUsageContext;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.world.GameMode;
-
+import net.minecraft.commands.Commands;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.Container;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
@@ -51,56 +50,56 @@ public final class VanillaFixture implements ModInitializer {
         CommandRegistrationCallback.EVENT.register(
                 (dispatcher, registries, environment) -> {
                     var command =
-                            CommandManager.literal("vanilla-fixture")
-                                    .requires(source -> source.hasPermissionLevel(OPERATOR_LEVEL));
+                            Commands.literal("vanilla-fixture")
+                                    .requires(source -> source.hasPermission(OPERATOR_LEVEL));
                     command.then(
-                            CommandManager.literal("craft")
+                            Commands.literal("craft")
                                     .executes(
                                             context ->
                                                     open(
-                                                            context.getSource().getPlayerOrThrow(),
+                                                            context.getSource().getPlayerOrException(),
                                                             Blocks.CRAFTING_TABLE)));
                     command.then(
-                            CommandManager.literal("furnace")
+                            Commands.literal("furnace")
                                     .executes(
                                             context ->
                                                     open(
-                                                            context.getSource().getPlayerOrThrow(),
+                                                            context.getSource().getPlayerOrException(),
                                                             Blocks.FURNACE)));
                     command.then(
-                            CommandManager.literal("chest")
+                            Commands.literal("chest")
                                     .executes(
                                             context ->
                                                     open(
-                                                            context.getSource().getPlayerOrThrow(),
+                                                            context.getSource().getPlayerOrException(),
                                                             Blocks.CHEST)));
                     dispatcher.register(command);
-                    dispatcher.register(CommandManager.literal("vanilla-fixture-ground")
-                            .requires(source -> source.hasPermissionLevel(OPERATOR_LEVEL))
-                            .executes(context -> ground(context.getSource().getPlayerOrThrow())));
+                    dispatcher.register(Commands.literal("vanilla-fixture-ground")
+                            .requires(source -> source.hasPermission(OPERATOR_LEVEL))
+                            .executes(context -> ground(context.getSource().getPlayerOrException())));
                 });
         ServerPlayConnectionEvents.DISCONNECT.register(
                 (handler, server) -> {
-                    if (server.isDedicated()) {
-                        server.execute(() -> server.stop(false /* waitForShutdown */));
+                    if (server.isDedicatedServer()) {
+                        server.execute(() -> server.halt(false /* waitForShutdown */));
                     }
                 });
     }
 
-    private static void seed(ServerPlayerEntity player) {
+    private static void seed(ServerPlayer player) {
         // 固定平台保证地面交互距离稳定，只为首次进入的玩家放入测试物品。
         var server = player.getServer();
-        server.getPlayerManager().addToOperators(player.getGameProfile());
-        var world = player.getServerWorld();
+        server.getPlayerList().op(player.getGameProfile());
+        var world = player.serverLevel();
         for (int x = -PLATFORM_RADIUS; x <= PLATFORM_RADIUS; x++) {
             for (int z = -PLATFORM_RADIUS; z <= PLATFORM_RADIUS; z++) {
-                world.setBlockState(
+                world.setBlockAndUpdate(
                         new BlockPos(x, PLATFORM_Y, z),
-                        Blocks.STONE.getDefaultState());
+                        Blocks.STONE.defaultBlockState());
             }
         }
-        player.teleport(world, BLOCK_CENTER, PLATFORM_Y + 1, BLOCK_CENTER, 0, 0);
-        player.changeGameMode(GameMode.SURVIVAL);
+        player.teleportTo(world, BLOCK_CENTER, PLATFORM_Y + 1, BLOCK_CENTER, 0, 0);
+        player.setGameMode(GameType.SURVIVAL);
         var account = new PlayerAccount(player);
         if (account.data().getRevision() > 0) {
             return;
@@ -138,50 +137,50 @@ public final class VanillaFixture implements ModInitializer {
         }
     }
 
-    private static int open(ServerPlayerEntity player, Block block) {
-        // 使用真实方块的 NamedScreenHandlerFactory，距离与燃烧均按原版实现验证。
-        var pos = player.getBlockPos().east(DISTANCE_BLOCKS);
-        var world = player.getServerWorld();
-        world.setBlockState(pos, Blocks.AIR.getDefaultState());
-        var state = block.getDefaultState();
-        world.setBlockState(pos, state);
-        if (world.getBlockEntity(pos) instanceof Inventory inventory) {
+    private static int open(ServerPlayer player, Block block) {
+        // 使用真实方块的 MenuProvider，距离与燃烧均按原版实现验证。
+        var pos = player.blockPosition().east(DISTANCE_BLOCKS);
+        var world = player.serverLevel();
+        world.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+        var state = block.defaultBlockState();
+        world.setBlockAndUpdate(pos, state);
+        if (world.getBlockEntity(pos) instanceof Container inventory) {
             if (block == Blocks.FURNACE) {
-                inventory.setStack(0, new ItemStack(Items.RAW_IRON));
-                inventory.setStack(1, new ItemStack(Items.COAL));
+                inventory.setItem(0, new ItemStack(Items.RAW_IRON));
+                inventory.setItem(1, new ItemStack(Items.COAL));
             } else {
-                inventory.setStack(0, new ItemStack(Items.STONE, STONE_COUNT));
+                inventory.setItem(0, new ItemStack(Items.STONE, STONE_COUNT));
             }
-            inventory.markDirty();
+            inventory.setChanged();
         }
-        player.openHandledScreen(state.createScreenHandlerFactory(world, pos));
+        player.openMenu(state.getMenuProvider(world, pos));
         return 1;
     }
 
-    private static int ground(ServerPlayerEntity player) {
+    private static int ground(ServerPlayer player) {
         // 先用真实放置事务把空背包落地，再打开箱子验证地面模型与原版槽位互通。
-        player.closeHandledScreen();
-        int selected = player.getInventory().selectedSlot;
-        player.getInventory().selectedSlot = FIXTURE_SLOT;
-        player.getInventory().setStack(FIXTURE_SLOT, ContainerItems.create(ContainerItems.POUCH));
-        var support = player.getBlockPos().south(DISTANCE_BLOCKS).down();
-        var hit = new BlockHitResult(Vec3d.ofCenter(support).add(0, BLOCK_CENTER, 0),
+        player.closeContainer();
+        int selected = player.getInventory().selected;
+        player.getInventory().selected = FIXTURE_SLOT;
+        player.getInventory().setItem(FIXTURE_SLOT, ContainerItems.create(ContainerItems.POUCH));
+        var support = player.blockPosition().south(DISTANCE_BLOCKS).below();
+        var hit = new BlockHitResult(Vec3.atCenterOf(support).add(0, BLOCK_CENTER, 0),
                 Direction.UP, support, false /* insideBlock */);
-        boolean sneaking = player.isSneaking();
-        player.setSneaking(true /* sneaking */);
+        boolean sneaking = player.isShiftKeyDown();
+        player.setShiftKeyDown(true /* sneaking */);
         try {
             var result = GroundInventory.get(player.getServer()).place(
-                    new ItemUsageContext(player, Hand.MAIN_HAND, hit));
-            if (!result.isAccepted()) {
+                    new UseOnContext(player, InteractionHand.MAIN_HAND, hit));
+            if (!result.consumesAction()) {
                 throw new IllegalStateException("地面背包夹具放置失败");
             }
         } finally {
-            player.setSneaking(sneaking);
-            player.getInventory().selectedSlot = selected;
+            player.setShiftKeyDown(sneaking);
+            player.getInventory().selected = selected;
         }
         open(player, Blocks.CHEST);
-        player.currentScreenHandler.getSlot(0).setStack(new ItemStack(Items.IRON_INGOT));
-        player.currentScreenHandler.syncState();
+        player.containerMenu.getSlot(0).setByPlayer(new ItemStack(Items.IRON_INGOT));
+        player.containerMenu.sendAllDataToRemote();
         return 1;
     }
 }

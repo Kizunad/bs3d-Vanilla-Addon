@@ -17,9 +17,7 @@ import dev.kizuna.inventoryui.registry.FrameworkCatalog;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -142,13 +140,13 @@ public final class VanillaClient implements ClientModule {
                         });
     }
 
-    public boolean ready(HandledScreen<?> screen) {
+    public boolean ready(AbstractContainerScreen<?> screen) {
         return runtime != null
                 && !state.getMenu().isEmpty()
-                && screen.getScreenHandler().syncId == state.getSyncId();
+                && screen.getMenu().containerId == state.getSyncId();
     }
 
-    public boolean action(HandledScreen<?> screen, Consumer<ActionRequest.Builder> fill) {
+    public boolean action(AbstractContainerScreen<?> screen, Consumer<ActionRequest.Builder> fill) {
         // 等到当前页面协商完成再发意图；请求不携带 NBT 或客户端生成的物品数量。
         if (!ready(screen) || busy() || volume.busy()) {
             return false;
@@ -170,14 +168,14 @@ public final class VanillaClient implements ClientModule {
         return true;
     }
 
-    private ActionRequest.Builder base(HandledScreen<?> screen) {
+    private ActionRequest.Builder base(AbstractContainerScreen<?> screen) {
         return ActionRequest.newBuilder()
                 .setMenu(state.getMenu())
-                .setSyncId(screen.getScreenHandler().syncId)
+                .setSyncId(screen.getMenu().containerId)
                 .setOperation(UUID.randomUUID().toString())
                 .setInventoryRevision(volume.state().getRevision())
                 .setCursorFingerprint(
-                        StackCodec.fingerprint(screen.getScreenHandler().getCursorStack()));
+                        StackCodec.fingerprint(screen.getMenu().getCarried()));
     }
 
     private void send(ActionRequest request) {

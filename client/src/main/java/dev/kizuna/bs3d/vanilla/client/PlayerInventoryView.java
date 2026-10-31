@@ -1,11 +1,11 @@
 package dev.kizuna.bs3d.vanilla.client;
 
 import dev.kizuna.bs3d.vanilla.protocol.VanillaMenus;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.screen.PlayerScreenHandler;
-import net.minecraft.screen.slot.Slot;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.inventory.Slot;
 
 /** 已适配工作站按可见行数裁接原版纹理，第三方菜单保持原布局。 */
 public final class PlayerInventoryView {
@@ -17,37 +17,37 @@ public final class PlayerInventoryView {
         // 所有库存值仍从原版槽位读取。
     }
 
-    public static boolean visible(HandledScreen<?> screen, Slot slot) {
+    public static boolean visible(AbstractContainerScreen<?> screen, Slot slot) {
         // 未适配菜单保留自己的绘制；人物装备的展示由页面进一步决定。
         if (!((StationHost) screen).stationSlotVisible(slot)) {
             return false;
         }
-        if (!VanillaMenus.supports(screen.getScreenHandler())) {
+        if (!VanillaMenus.supports(screen.getMenu())) {
             return true;
         }
-        var player = MinecraftClient.getInstance().player;
-        if (slot.inventory == player.getInventory() && !PlayerInventoryRows.visible(slot.getIndex())) {
+        var player = Minecraft.getInstance().player;
+        if (slot.container == player.getInventory() && !PlayerInventoryRows.visible(slot.getContainerSlot())) {
             return false;
         }
         return true;
     }
 
-    public static void arrange(HandledScreen<?> screen) {
+    public static void arrange(AbstractContainerScreen<?> screen) {
         // 保留玩家区第一行位置，只把快捷栏移到最后一条可见主背包行下方。
         Slot first = stationMainSlot(screen);
         if (first == null) {
             return;
         }
         int hotbarY = first.y + PlayerInventoryRows.visibleRows() * SLOT_PITCH_PIXELS + HOTBAR_GAP_PIXELS;
-        var inventory = MinecraftClient.getInstance().player.getInventory();
-        for (Slot slot : screen.getScreenHandler().slots) {
-            if (slot.inventory == inventory && slot.getIndex() < PlayerInventoryRows.COLUMNS) {
+        var inventory = Minecraft.getInstance().player.getInventory();
+        for (Slot slot : screen.getMenu().slots) {
+            if (slot.container == inventory && slot.getContainerSlot() < PlayerInventoryRows.COLUMNS) {
                 ((SlotPosition) slot).bs3dVanilla$setY(hotbarY);
             }
         }
     }
 
-    public static void drawBackground(HandledScreen<?> screen, DrawContext context, Runnable original) {
+    public static void drawBackground(AbstractContainerScreen<?> screen, GuiGraphics context, Runnable original) {
         // 背景在最后一条可见行的下边框处切开，下半段整体上移，方块槽位纹理不重写。
         Slot first = stationMainSlot(screen);
         int visibleRows = PlayerInventoryRows.visibleRows();
@@ -62,23 +62,23 @@ public final class PlayerInventoryView {
         original.run();
         context.disableScissor();
         context.enableScissor(0, cut, screen.width, screen.height);
-        context.getMatrices().push();
-        context.getMatrices().translate(0, -removedRows * SLOT_PITCH_PIXELS, 0);
+        context.pose().pushPose();
+        context.pose().translate(0, -removedRows * SLOT_PITCH_PIXELS, 0);
         original.run();
-        context.getMatrices().pop();
+        context.pose().popPose();
         context.disableScissor();
     }
 
-    private static Slot stationMainSlot(HandledScreen<?> screen) {
+    private static Slot stationMainSlot(AbstractContainerScreen<?> screen) {
         // 玩家 E 页由页面自身排版，第三方菜单保持三行；其余工作站以第一格主背包定位玩家区。
-        var handler = screen.getScreenHandler();
-        if (handler instanceof PlayerScreenHandler || !VanillaMenus.supports(handler)) {
+        var handler = screen.getMenu();
+        if (handler instanceof InventoryMenu || !VanillaMenus.supports(handler)) {
             return null;
         }
-        var inventory = MinecraftClient.getInstance().player.getInventory();
+        var inventory = Minecraft.getInstance().player.getInventory();
         return handler.slots.stream()
-                .filter(slot -> slot.inventory == inventory)
-                .filter(slot -> slot.getIndex() == PlayerInventoryRows.COLUMNS)
+                .filter(slot -> slot.container == inventory)
+                .filter(slot -> slot.getContainerSlot() == PlayerInventoryRows.COLUMNS)
                 .findFirst()
                 .orElse(null);
     }

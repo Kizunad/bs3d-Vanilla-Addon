@@ -2,7 +2,7 @@
 
 ## 2026-10-30：创造模式「物品栏」页签接入
 
-为 Pocket 附属的创造页三维人物新增五个接入点：`StationHost.stationSupported`、`stationActive`、`stationMenuSlot`、`stationSharedCursor` 和 `stationClick`。另外新增创造页混入，以及 `CreativeSlot` 的真实槽访问器。说明见[接入与扩展](Extension-Guide.md)和[交互与支持范围](Interaction.md)。默认值保持原有行为：普通页面的页面槽就是菜单槽，光标由服务器同步。业务协议仍是 **v2**。
+为 Pocket 附属的创造页三维人物新增五个接入点：`StationHost.stationSupported`、`stationActive`、`stationMenuSlot`、`stationSharedCursor` 和 `stationClick`。另外新增创造页混入，以及 `SlotWrapper` 的真实槽访问器。说明见[接入与扩展](Extension-Guide.md)和[交互与支持范围](Interaction.md)。默认值保持原有行为：普通页面的页面槽就是菜单槽，光标由服务器同步。业务协议仍是 **v2**。
 
 创造页「物品栏」页签上的行为：
 

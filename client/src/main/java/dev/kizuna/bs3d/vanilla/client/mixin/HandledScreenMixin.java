@@ -6,14 +6,12 @@ import dev.kizuna.bs3d.vanilla.client.StationPanel;
 import dev.kizuna.bs3d.vanilla.client.VanillaClient;
 import dev.kizuna.inventoryui.client.InventoryUiClient;
 import dev.kizuna.inventoryui.theme.ThemeTokens;
-
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.screen.slot.Slot;
-import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.text.Text;
-
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.Slot;
 import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -25,25 +23,25 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /** 只在已适配的原版页面插入两侧场景，保留原版 Screen 和所有配方控件。 */
-@Mixin(HandledScreen.class)
+@Mixin(AbstractContainerScreen.class)
 public abstract class HandledScreenMixin extends Screen implements StationHost {
     @Unique private static final int BS3D_SLOT_PIXELS = 16;
     @Unique private static final int BS3D_RGB_MASK = 0x00FFFFFF;
     @Unique private static final int BS3D_PENDING_ALPHA = 0x70000000;
-    @Shadow protected int x;
-    @Shadow protected int y;
-    @Shadow protected int backgroundWidth;
-    @Shadow protected abstract void drawBackground(DrawContext context, float delta, int mouseX, int mouseY);
-    @Shadow protected abstract void onMouseClick(Slot slot, int slotId, int button, SlotActionType actionType);
+    @Shadow protected int leftPos;
+    @Shadow protected int topPos;
+    @Shadow protected int imageWidth;
+    @Shadow protected abstract void renderBg(GuiGraphics context, float delta, int mouseX, int mouseY);
+    @Shadow protected abstract void slotClicked(Slot slot, int slotId, int button, ClickType actionType);
 
     @Shadow
-    private Slot getSlotAt(double x, double y) {
+    private Slot findSlot(double x, double y) {
         throw new AssertionError();
     }
 
     @Unique private StationPanel bs3dVanilla$panel;
 
-    protected HandledScreenMixin(Text title) {
+    protected HandledScreenMixin(Component title) {
         super(title);
     }
 
@@ -53,24 +51,24 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
         if (bs3dVanilla$panel == null
                 && VanillaClient.instance() != null
                 && stationSupported()) {
-            bs3dVanilla$panel = new StationPanel((HandledScreen<?>) (Object) this);
+            bs3dVanilla$panel = new StationPanel((AbstractContainerScreen<?>) (Object) this);
         }
     }
 
     @Inject(method = "render", at = @At("HEAD"))
     private void bs3dVanilla$render(
-            DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo callback) {
+            GuiGraphics context, int mouseX, int mouseY, float delta, CallbackInfo callback) {
         // 先画场景，再让原版绘制槽位、光标和悬停提示，保留原版前后关系。
-        PlayerInventoryView.arrange((HandledScreen<?>) (Object) this);
+        PlayerInventoryView.arrange((AbstractContainerScreen<?>) (Object) this);
         if (bs3dVanilla$panel != null) {
             bs3dVanilla$panel.draw(context, mouseX, mouseY);
         }
     }
 
-    @Inject(method = "drawSlot", at = @At("HEAD"), cancellable = true)
-    private void bs3dVanilla$pendingSlot(DrawContext context, Slot slot, CallbackInfo callback) {
+    @Inject(method = "renderSlot", at = @At("HEAD"), cancellable = true)
+    private void bs3dVanilla$pendingSlot(GuiGraphics context, Slot slot, CallbackInfo callback) {
         // 源槽只在网络回执前显示半透明占位，拒绝时原版物品仍在同一位置。
-        if (!PlayerInventoryView.visible((HandledScreen<?>) (Object) this, slot)) {
+        if (!PlayerInventoryView.visible((AbstractContainerScreen<?>) (Object) this, slot)) {
             callback.cancel();
             return;
         }
@@ -91,23 +89,22 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
         if (menuSlot == null) {
             return false;
         }
-        return VanillaClient.instance().pendingMenuSlot(menuSlot.id);
+        return VanillaClient.instance().pendingMenuSlot(menuSlot.index);
     }
 
     @Redirect(method = "render", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/client/gui/screen/ingame/HandledScreen;drawBackground"
-                    + "(Lnet/minecraft/client/gui/DrawContext;FII)V"))
-    private void bs3dVanilla$background(HandledScreen<?> screen, DrawContext context,
+            target = "Lnet/minecraft/client/gui/screens/inventory/AbstractContainerScreen;renderBg(Lnet/minecraft/client/gui/GuiGraphics;FII)V"))
+    private void bs3dVanilla$background(AbstractContainerScreen<?> screen, GuiGraphics context,
                                        float delta, int mouseX, int mouseY) {
         // 裁接只作用于背景，原版槽位物品和悬停提示仍绘制一次。
-        PlayerInventoryView.drawBackground(screen, context, () -> drawBackground(context, delta, mouseX, mouseY));
+        PlayerInventoryView.drawBackground(screen, context, () -> renderBg(context, delta, mouseX, mouseY));
     }
 
-    @Inject(method = "isPointOverSlot", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "isHovering(Lnet/minecraft/world/inventory/Slot;DD)Z", at = @At("HEAD"), cancellable = true)
     private void bs3dVanilla$hiddenHit(Slot slot, double mouseX, double mouseY,
                                       CallbackInfoReturnable<Boolean> callback) {
         // 隐藏槽同时退出命中与高亮，不能留下不可见的客户端交互区域。
-        if (!PlayerInventoryView.visible((HandledScreen<?>) (Object) this, slot)) {
+        if (!PlayerInventoryView.visible((AbstractContainerScreen<?>) (Object) this, slot)) {
             callback.setReturnValue(false);
         }
     }
@@ -177,26 +174,26 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
 
     @Override
     public int stationLeft() {
-        return x;
+        return leftPos;
     }
 
     @Override
     public int stationTop() {
-        return y;
+        return topPos;
     }
 
     @Override
     public int stationWidth() {
-        return backgroundWidth;
+        return imageWidth;
     }
 
     @Override
     public Slot stationSlotAt(double x, double y) {
-        return getSlotAt(x, y);
+        return findSlot(x, y);
     }
 
     @Override
     public void stationClick(Slot slot) {
-        onMouseClick(slot, slot.id, GLFW.GLFW_MOUSE_BUTTON_LEFT, SlotActionType.PICKUP);
+        slotClicked(slot, slot.index, GLFW.GLFW_MOUSE_BUTTON_LEFT, ClickType.PICKUP);
     }
 }
