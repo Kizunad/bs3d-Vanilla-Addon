@@ -1,13 +1,13 @@
 {
   "required": true,
   "package": "dev.kizuna.bs3d.vanilla.client.mixin",
-  "compatibilityLevel": "JAVA_17",
-  "refmap": "bs3d.vanilla.refmap.json",
+  "compatibilityLevel": "JAVA_25",
   "client": [
     "SlotPositionMixin",
     "HandledScreenMixin",
     "CreativeInventoryScreenMixin",
     "CreativeSlotAccess",
+    "RecipeBookScreenAccess",
     "ScreenBackgroundMixin",
     "HudMixin"
   ],

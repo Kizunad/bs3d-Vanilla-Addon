@@ -17,8 +17,7 @@ import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.MenuSlot;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.PlayerSlot;
 import java.util.List;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
@@ -98,26 +97,27 @@ final class MenuTransfers {
         }
         switch (transfer.getSourceCase()) {
             case ITEM -> transaction.exchange(CursorTransfer.Request.take(revision, transfer.getItem()));
-            case SLOT -> takeSlot(player, menuSlot(handler, transfer.getSlot()));
+            case SLOT -> takeSlot(player, menuSlot(player, transfer.getSlot()));
             case BODY -> takeBody(player, transfer.getBody());
             default -> throw new IllegalArgumentException("缺少物品来源");
         }
     }
 
-    private static Slot menuSlot(AbstractContainerMenu handler, MenuSlot request) {
+    private static Slot menuSlot(ServerPlayer player, MenuSlot request) {
         // 指纹在点击前核对，不能把页面上已经更换的栈误当作原拖动来源或落点。
+        var handler = player.containerMenu;
         int index = request.getSlot();
         if (index < 0 || index >= handler.slots.size()) {
             throw new IllegalArgumentException("原版槽位无效");
         }
         Slot slot = handler.getSlot(index);
-        requireFingerprint(slot.getItem(), request.getFingerprint());
+        requireFingerprint(player, slot.getItem(), request.getFingerprint());
         return slot;
     }
 
-    private static void requireFingerprint(ItemStack stack, ByteString expected) {
+    private static void requireFingerprint(ServerPlayer player, ItemStack stack, ByteString expected) {
         // 服务端读取真实栈，客户端只提供抓取时的摘要。
-        if (!StackCodec.fingerprint(stack).equals(expected)) {
+        if (!StackCodec.fingerprint(stack, player.registryAccess()).equals(expected)) {
             throw new IllegalArgumentException("槽位物品已变化");
         }
     }
@@ -127,17 +127,17 @@ final class MenuTransfers {
         if (!slot.mayPickup(player) || !slot.hasItem()) {
             throw new IllegalArgumentException("这个槽位不能取出物品");
         }
-        player.containerMenu.clicked(slot.index, 0, ClickType.PICKUP, player);
+        player.containerMenu.clicked(slot.index, 0, ContainerInput.PICKUP, player);
     }
 
     private static void takeBody(ServerPlayer player, PlayerSlot request) {
         // 玩家模型使用 Inventory 槽号，绑定装备必须先验证卸装权限。
         int index = request.getSlot();
-        if (!PlayerSlots.isInteractive(index, player.getInventory().selected)) {
+        if (!PlayerSlots.isInteractive(index, player.getInventory().getSelectedSlot())) {
             throw new IllegalArgumentException("来源不是当前双手或盔甲");
         }
         var stack = player.getInventory().getItem(index);
-        requireFingerprint(stack, request.getFingerprint());
+        requireFingerprint(player, stack, request.getFingerprint());
         if (PlayerSlots.bindingLocked(index, stack, player.isCreative())) {
             throw new IllegalArgumentException("绑定诅咒装备不能取下");
         }
@@ -152,7 +152,7 @@ final class MenuTransfers {
                 long revision = ((PlayerStorage) player).bs3d$getInventory().getRevision();
                 transaction.exchange(destination(revision, transfer.getBag()));
             }
-            case DESTINATION -> putSlot(player, menuSlot(player.containerMenu, transfer.getDestination()));
+            case DESTINATION -> putSlot(player, menuSlot(player, transfer.getDestination()));
             case BODY_DESTINATION -> PlayerCursor.click(player, transfer.getBodyDestination());
             case PLAYER_INVENTORY -> {
                 if (!transfer.getPlayerInventory()) {
@@ -172,11 +172,11 @@ final class MenuTransfers {
         ItemStack cursor = handler.getCarried();
         ItemStack existing = slot.getItem();
         if (!slot.mayPlace(cursor)
-                || !existing.isEmpty() && !ItemStack.isSameItemSameTags(existing, cursor)
+                || !existing.isEmpty() && !ItemStack.isSameItemSameComponents(existing, cursor)
                 || existing.getCount() + cursor.getCount() > slot.getMaxStackSize(cursor)) {
             throw new IllegalArgumentException("目标槽位放不下整栈物品");
         }
-        handler.clicked(slot.index, 0, ClickType.PICKUP, player);
+        handler.clicked(slot.index, 0, ContainerInput.PICKUP, player);
     }
 
     static CursorTransfer.Request destination(long revision, BagDestination destination) {

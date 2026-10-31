@@ -18,6 +18,7 @@ import dev.kizuna.backpack3d.protocol.pb.VolumeProtocol.Container;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.BagDestination;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.PlayerSlot;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.OpenSceneRequest;
+import dev.kizuna.bs3d.vanilla.client.mixin.RecipeBookScreenAccess;
 import dev.kizuna.inventoryui.client.InventoryUiClient;
 import dev.kizuna.inventoryui.theme.ThemeTokens;
 import org.lwjgl.glfw.GLFW;
@@ -26,9 +27,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
@@ -92,14 +93,14 @@ public final class StationPanel {
         if (!host.stationActive()) {
             return false;
         }
-        if (screen instanceof net.minecraft.client.gui.screens.recipebook.RecipeUpdateListener recipes
-                && recipes.getRecipeBookComponent().isVisible()) {
+        if (screen instanceof RecipeBookScreenAccess recipes
+                && recipes.bs3dVanilla$recipeBook().isVisible()) {
             return false;
         }
         return addon.ready(screen) && layout().visible();
     }
 
-    public void draw(GuiGraphics context, int mx, int my) {
+    public void draw(GuiGraphicsExtractor context, int mx, int my) {
         // 页面状态就绪后绘制人物、内景与同一事务的反馈。
         if (!enabled()) {
             return;
@@ -128,7 +129,7 @@ public final class StationPanel {
         return addon.action(screen, request -> request.setOpenScene(OpenSceneRequest.getDefaultInstance()));
     }
 
-    private void drawPlayer(GuiGraphics context, Rect body, int mx, int my) {
+    private void drawPlayer(GuiGraphicsExtractor context, Rect body, int mx, int my) {
         // 抓取来源使模型高亮变为可落色，网络等待仍保留权威来源占位。
         int scale =
                 (int)
@@ -145,8 +146,11 @@ public final class StationPanel {
             source = "cursor";
         }
         player.dropSource(source);
+        // 画中画铺满整个页面且不加平移，命中缓存与鼠标同为屏幕坐标，人物也不会被裁在小框里。
         player.draw(
                 context,
+                screen.width,
+                screen.height,
                 body.x() + body.width() / 2,
                 body.y() + (int) (body.height() * PLAYER_BASELINE_RATIO),
                 scale,
@@ -156,11 +160,11 @@ public final class StationPanel {
                 animations);
     }
 
-    private void drawFeedback(GuiGraphics context, StationLayout layout, int mx, int my) {
+    private void drawFeedback(GuiGraphicsExtractor context, StationLayout layout, int mx, int my) {
         // 拒绝原因贴在内景区域底边，原版槽位排在场景下方时也不会被背景盖住。
         var font = Minecraft.getInstance().font;
         if (!addon.detail().isBlank()) {
-            context.drawString(
+            context.text(
                     font,
                     font.plainSubstrByWidth(addon.detail(), layout.interior().width()),
                     layout.interior().x(),
@@ -171,7 +175,7 @@ public final class StationPanel {
         if (!addon.busy() && screen.getMenu().getCarried().isEmpty() && !help) {
             ItemStack hovered = hovered(mx, my);
             if (!hovered.isEmpty()) {
-                context.renderTooltip(font, hovered, mx, my);
+                context.setTooltipForNextFrame(font, hovered, mx, my);
             }
         }
     }
@@ -204,7 +208,7 @@ public final class StationPanel {
                 .orElse(null);
     }
 
-    private void drawInterior(GuiGraphics context, Rect area, int mx, int my) {
+    private void drawInterior(GuiGraphicsExtractor context, Rect area, int mx, int my) {
         var container = findContainer(active);
         if (container == null) {
             return;
@@ -213,21 +217,21 @@ public final class StationPanel {
         int headerBottom = area.y() + StationLayout.HEADER_PIXELS;
         context.fill(
                 area.x(), area.y(), area.right(), headerBottom, color(ThemeTokens.HUD_BACKGROUND));
-        context.drawString(
+        context.text(
                 font,
                 font.plainSubstrByWidth(container.getTitle(), area.width() - BUTTON_PIXELS * 2),
                 area.x() + GAP_PIXELS,
                 area.y() + GAP_PIXELS,
                 color(ThemeTokens.TEXT),
                 false);
-        context.drawString(
+        context.text(
                 font,
                 minimized ? "+" : "−",
                 area.right() - BUTTON_PIXELS * 2,
                 area.y() + GAP_PIXELS,
                 color(ThemeTokens.TEXT),
                 false);
-        context.drawString(
+        context.text(
                 font,
                 "×",
                 area.right() - BUTTON_PIXELS,
@@ -247,7 +251,7 @@ public final class StationPanel {
         interior.draw(context, volume, container, viewport, mx, my, "", null, orientation);
     }
 
-    private void drawInfo(GuiGraphics context, StationLayout layout) {
+    private void drawInfo(GuiGraphicsExtractor context, StationLayout layout) {
         // 圆形信息按钮只在需要时展开操作说明，不增加常驻底栏。
         var font = Minecraft.getInstance().font;
         int centerX = screen.width - StationLayout.MARGIN_PIXELS - INFO_RADIUS_PIXELS;
@@ -261,7 +265,7 @@ public final class StationPanel {
                     centerY + dy + 1,
                     color(ThemeTokens.HUD_BACKGROUND));
         }
-        context.drawString(
+        context.text(
                 font,
                 "i",
                 centerX - font.width("i") / 2,
@@ -283,7 +287,7 @@ public final class StationPanel {
                     area.x(), area.y(), area.right(), bottom, color(ThemeTokens.HUD_BACKGROUND));
             int y = area.y() + GAP_PIXELS;
             for (var line : lines) {
-                context.drawString(
+                context.text(
                         font, line, area.x() + GAP_PIXELS, y, color(ThemeTokens.TEXT), false);
                 y += font.lineHeight + GAP_PIXELS;
             }
@@ -352,7 +356,7 @@ public final class StationPanel {
                 selection = DragTransfer.newBuilder()
                         .setSlot(source)
                         .build();
-                if (Screen.hasShiftDown()) {
+                if (Minecraft.getInstance().hasShiftDown()) {
                     submit(selection.toBuilder().setBag(automatic(Volumes.CARRIED)));
                 }
             }
@@ -393,7 +397,7 @@ public final class StationPanel {
         selection = DragTransfer.newBuilder()
                 .setBody(source)
                 .build();
-        if (Screen.hasShiftDown()) {
+        if (Minecraft.getInstance().hasShiftDown()) {
             submit(selection.toBuilder().setBag(automatic(Volumes.CARRIED)));
         }
     }
@@ -462,7 +466,7 @@ public final class StationPanel {
                     .findFirst()
                     .orElseThrow()
                     .getOrientation();
-            if (Screen.hasShiftDown()) {
+            if (Minecraft.getInstance().hasShiftDown()) {
                 submit(selection.toBuilder().setPlayerInventory(true /* playerInventory */));
             }
         }
@@ -491,7 +495,7 @@ public final class StationPanel {
         var stack = Minecraft.getInstance().player.getInventory().getItem(slot);
         return PlayerSlot.newBuilder()
                 .setSlot(slot)
-                .setFingerprint(StackCodec.fingerprint(stack))
+                .setFingerprint(StackCodec.fingerprint(stack, Minecraft.getInstance().player.registryAccess()))
                 .build();
     }
 
@@ -503,7 +507,7 @@ public final class StationPanel {
         }
         return MenuSlot.newBuilder()
                 .setSlot(slot.index)
-                .setFingerprint(StackCodec.fingerprint(slot.getItem()))
+                .setFingerprint(StackCodec.fingerprint(slot.getItem(), Minecraft.getInstance().player.registryAccess()))
                 .build();
     }
 
@@ -739,13 +743,13 @@ public final class StationPanel {
         return false;
     }
 
-    public boolean key(int key, int scan, int modifiers) {
+    public boolean key(KeyEvent event) {
         // 旋转键沿用 BS3D 配置，只有选中物品时消费输入。
         if (!enabled()) {
             return false;
         }
-        if (key == GLFW.GLFW_KEY_ESCAPE
-                || Minecraft.getInstance().options.keyInventory.matches(key, scan)) {
+        if (event.key() == GLFW.GLFW_KEY_ESCAPE
+                || Minecraft.getInstance().options.keyInventory.matches(event)) {
             resetCapture();
             return false;
         }
@@ -753,13 +757,13 @@ public final class StationPanel {
         if (!active.isEmpty()
                 && viewport().contains(mouseX, mouseY)
                 && (selection != null || !screen.getMenu().getCarried().isEmpty())) {
-            var pressedKey = InputConstants.getKey(key, scan);
+            var pressedKey = InputConstants.getKey(event);
             boolean yaw = volume.rotateYaw().equals(pressedKey);
             boolean pitch = volume.rotatePitch().equals(pressedKey);
             if (yaw || pitch) {
                 orientation =
                         OrthogonalRotation.turn(
-                                orientation, pitch, (modifiers & GLFW.GLFW_MOD_SHIFT) != 0);
+                                orientation, pitch, event.hasShiftDown());
                 return true;
             }
         }

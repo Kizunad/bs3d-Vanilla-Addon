@@ -1,5 +1,29 @@
 # 验证记录
 
+## 2026-11-01：迁移到 Minecraft 26.2 / Java 25
+
+运行环境改为 Minecraft 26.2、Fabric Loader 0.20.1、Fabric API 0.161.0+26.2、owo 0.13.1+26.2、Java 25，构建使用 Gradle 9.8.0、Fabric Loom 1.19.3。功能、业务协议 **v2** 与保存格式不变，配套 BS3D 为同日迁移的 26.2 版本。
+
+26.2 的界面先提取后绘制，钩子随之调整：
+
+- 场景改在 `extractContents` 开头登记，位于原版纹理之后、控件与槽位之前。
+- 背景裁接改为包住 `Screen.extractBackground` 的调用：暗幕只画一次，两段裁剪只画工作站纹理（新增 `StationHost.stationBackdrop`）。
+- 人物画中画铺满整页、不加平移，命中缓存与鼠标同为屏幕坐标。
+- 配方书组件不再公开，改由访问器读取展开状态。
+- 创造页滚轮改在 `AbstractContainerScreen.mouseScrolled` 开头处理（创造页先调用父类）。
+- 26.2 去掉了 `playNotifySound`，完成音效按其原实现只发给本玩家。
+
+Java 25 `test build :client:compileSmokeJava :server:compileSmokeJava` 通过：附属客户端 **3 项**、服务端 **2 项**，共 **5 项测试**，与迁移前相同，无失败或跳过。两端安装产物为 `jar` 任务输出，均不含 smoke 夹具或 refmap；专服 JAR 不含客户端渲染或 owo 类。
+
+真实 Fabric 专服与 Xvfb（llvmpipe 软件渲染）客户端联调两种模式均通过，覆盖项与 2026-10-30 记录相同：
+
+- `build/smoke/cdc3e774147f-dedicated/client/vanilla-ok.txt`
+- `build/smoke/97fb02c7ca1e-integrated/client/vanilla-ok.txt`（另含同世界重启后背包内容保留）
+
+26.2 起，原版包在服务端包队列中按 tick 处理，聊天命令则直接进入主线程任务队列，两者先后不再有保证。探针原先关闭页面后立即用命令打开熔炉，新菜单会被随后处理的旧关闭包静默关掉。现在熔炉、箱子两步照 `REOPEN` 的做法，先等服务端确认旧页面已关再发命令。Fabric 自定义包与原版点击走同一包队列，产品代码的请求顺序不受影响。
+
+五张截图（工作台、熔炉、箱子、E 页、地面模型）与 2026-10-31 的 1.20.1 截图对比：布局、人物、内景与槽位一致，天空多了云层（26.2 在渲染距离 2 时也绘制云）。本轮可见行数为默认 3 行，背景两段裁剪由 Pocket 附属迁移后的联调覆盖。未在 Windows 实例上验证。
+
 ## 2026-10-30：创造模式「物品栏」页签接入
 
 为 Pocket 附属的创造页三维人物新增五个接入点：`StationHost.stationSupported`、`stationActive`、`stationMenuSlot`、`stationSharedCursor` 和 `stationClick`。另外新增创造页混入，以及 `SlotWrapper` 的真实槽访问器。说明见[接入与扩展](Extension-Guide.md)和[交互与支持范围](Interaction.md)。默认值保持原有行为：普通页面的页面槽就是菜单槽，光标由服务器同步。业务协议仍是 **v2**。

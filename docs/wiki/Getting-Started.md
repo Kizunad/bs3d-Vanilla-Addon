@@ -1,15 +1,15 @@
 # 安装与构建
 
-需要 Minecraft 1.20.1、Java 17、Fabric Loader 0.16.10、Fabric API 0.92.3+1.20.1，以及包含光标交换接口的 BS3D 和 Framework。三个项目均使用 `0.1.0-SNAPSHOT`，仅凭文件名无法区分源码版本。
+需要 Minecraft 26.2、Java 25、Fabric Loader 0.20.1、Fabric API 0.161.0+26.2、owo 0.13.1+26.2，以及包含光标交换接口的 BS3D 和 Framework。三个项目均使用 `0.1.0-SNAPSHOT`，仅凭文件名无法区分源码版本。
 
 配套源码版本记录在[验证记录](Validation.md)。Framework 与 BS3D 以组合构建接入，随本仓构建先行编译，在本仓库执行：
 
 ```bash
-./gradlew -Dorg.gradle.java.home=/path/to/jdk21 test build
+./gradlew -Dorg.gradle.java.home=/path/to/jdk25 test build
 python3 scripts/wiki.py check
 ```
 
-构建还需要相邻的 `Kizuna-Meridian-Mod-Framework`：`settings.gradle` 应用其 `scripts/workspace.gradle`，上述版本与 Gradle 8.14.6、Fabric Loom 1.13.6 都取自其版本目录 `scripts/libs.versions.toml`。默认依赖目录为相邻的 `../Kizuna-Inventory-UI-Framework` 和 `../backpack-and-storage-3D`，其他布局用 `-Pkizuna.dir.inventory-ui=…`、`-Pkizuna.dir.bs3d=…` 指定。Gradle 须在 Java 21 上运行（Loom 1.13 的要求），产物仍以 Java 17 为目标。Gradle Wrapper 已提交，不需要全局安装 Gradle；首次构建需要网络下载依赖。
+构建还需要相邻的 `Kizuna-Meridian-Mod-Framework`：`settings.gradle` 应用其 `scripts/workspace.gradle`，上述版本与 Gradle 9.8.0、Fabric Loom 1.19.3 都取自其版本目录 `scripts/libs.versions.toml`。默认依赖目录为相邻的 `../Kizuna-Inventory-UI-Framework` 和 `../backpack-and-storage-3D`，其他布局用 `-Pkizuna.dir.inventory-ui=…`、`-Pkizuna.dir.bs3d=…` 指定。Gradle 须在 Java 25 上运行，产物以 Java 25 为目标（Minecraft 26.2 的要求）。26.2 不混淆，直接用官方名编译，没有映射与 refmap，安装产物就是 `jar` 任务输出。Gradle Wrapper 已提交，不需要全局安装 Gradle；首次构建需要网络下载依赖。
 
 产物：
 

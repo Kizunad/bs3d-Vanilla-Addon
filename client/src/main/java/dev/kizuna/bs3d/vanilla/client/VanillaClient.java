@@ -17,6 +17,7 @@ import dev.kizuna.inventoryui.registry.FrameworkCatalog;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import java.util.Set;
 import java.util.UUID;
@@ -175,7 +176,8 @@ public final class VanillaClient implements ClientModule {
                 .setOperation(UUID.randomUUID().toString())
                 .setInventoryRevision(volume.state().getRevision())
                 .setCursorFingerprint(
-                        StackCodec.fingerprint(screen.getMenu().getCarried()));
+                        StackCodec.fingerprint(
+                                screen.getMenu().getCarried(), Minecraft.getInstance().player.registryAccess()));
     }
 
     private void send(ActionRequest request) {

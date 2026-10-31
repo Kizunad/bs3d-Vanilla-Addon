@@ -29,6 +29,7 @@ import net.minecraft.world.phys.Vec3;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /** 隔离世界的真实原版方块和物品夹具，不打入生产 JAR。 */
@@ -38,7 +39,6 @@ public final class VanillaFixture implements ModInitializer {
     private static final double BLOCK_CENTER = 0.5;
     private static final int PLATFORM_RADIUS = 3;
     private static final int PLATFORM_Y = 64;
-    private static final int OPERATOR_LEVEL = 2;
     private static final int LOG_COUNT = 4;
     private static final int INGOT_COUNT = 2;
     private static final int STONE_COUNT = 5;
@@ -51,7 +51,7 @@ public final class VanillaFixture implements ModInitializer {
                 (dispatcher, registries, environment) -> {
                     var command =
                             Commands.literal("vanilla-fixture")
-                                    .requires(source -> source.hasPermission(OPERATOR_LEVEL));
+                                    .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS));
                     command.then(
                             Commands.literal("craft")
                                     .executes(
@@ -75,7 +75,7 @@ public final class VanillaFixture implements ModInitializer {
                                                             Blocks.CHEST)));
                     dispatcher.register(command);
                     dispatcher.register(Commands.literal("vanilla-fixture-ground")
-                            .requires(source -> source.hasPermission(OPERATOR_LEVEL))
+                            .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
                             .executes(context -> ground(context.getSource().getPlayerOrException())));
                 });
         ServerPlayConnectionEvents.DISCONNECT.register(
@@ -88,9 +88,8 @@ public final class VanillaFixture implements ModInitializer {
 
     private static void seed(ServerPlayer player) {
         // 固定平台保证地面交互距离稳定，只为首次进入的玩家放入测试物品。
-        var server = player.getServer();
-        server.getPlayerList().op(player.getGameProfile());
-        var world = player.serverLevel();
+        var world = player.level();
+        world.getServer().getPlayerList().op(player.nameAndId());
         for (int x = -PLATFORM_RADIUS; x <= PLATFORM_RADIUS; x++) {
             for (int z = -PLATFORM_RADIUS; z <= PLATFORM_RADIUS; z++) {
                 world.setBlockAndUpdate(
@@ -98,7 +97,8 @@ public final class VanillaFixture implements ModInitializer {
                         Blocks.STONE.defaultBlockState());
             }
         }
-        player.teleportTo(world, BLOCK_CENTER, PLATFORM_Y + 1, BLOCK_CENTER, 0, 0);
+        player.teleportTo(world, BLOCK_CENTER, PLATFORM_Y + 1, BLOCK_CENTER,
+                Set.of() /* 绝对坐标 */, 0, 0, true /* 镜头回到自身 */);
         player.setGameMode(GameType.SURVIVAL);
         var account = new PlayerAccount(player);
         if (account.data().getRevision() > 0) {
@@ -112,7 +112,7 @@ public final class VanillaFixture implements ModInitializer {
                         .setContainer(bag)
                         .setSize(Volumes.UNIT)
                         .setBaseSize(Volumes.UNIT)
-                        .setStackNbt(StackCodec.encode(new ItemStack(Items.OAK_LOG, LOG_COUNT)))
+                        .setStackNbt(StackCodec.encode(new ItemStack(Items.OAK_LOG, LOG_COUNT), player.registryAccess()))
                         .build();
         ContainerItems.setContents(pouch, List.of(logs));
         var slots = account.inventory();
@@ -122,7 +122,7 @@ public final class VanillaFixture implements ModInitializer {
         slots.set(0, new ItemStack(Items.IRON_INGOT, INGOT_COUNT));
         var worn = WornContainer.newBuilder()
                 .setMount(Mount.WAIST_RIGHT_FRONT)
-                .setStackNbt(StackCodec.encode(pouch))
+                .setStackNbt(StackCodec.encode(pouch, player.registryAccess()))
                 .build();
         var data =
                 account.data().toBuilder()
@@ -140,7 +140,7 @@ public final class VanillaFixture implements ModInitializer {
     private static int open(ServerPlayer player, Block block) {
         // 使用真实方块的 MenuProvider，距离与燃烧均按原版实现验证。
         var pos = player.blockPosition().east(DISTANCE_BLOCKS);
-        var world = player.serverLevel();
+        var world = player.level();
         world.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
         var state = block.defaultBlockState();
         world.setBlockAndUpdate(pos, state);
@@ -160,8 +160,8 @@ public final class VanillaFixture implements ModInitializer {
     private static int ground(ServerPlayer player) {
         // 先用真实放置事务把空背包落地，再打开箱子验证地面模型与原版槽位互通。
         player.closeContainer();
-        int selected = player.getInventory().selected;
-        player.getInventory().selected = FIXTURE_SLOT;
+        int selected = player.getInventory().getSelectedSlot();
+        player.getInventory().setSelectedSlot(FIXTURE_SLOT);
         player.getInventory().setItem(FIXTURE_SLOT, ContainerItems.create(ContainerItems.POUCH));
         var support = player.blockPosition().south(DISTANCE_BLOCKS).below();
         var hit = new BlockHitResult(Vec3.atCenterOf(support).add(0, BLOCK_CENTER, 0),
@@ -169,14 +169,14 @@ public final class VanillaFixture implements ModInitializer {
         boolean sneaking = player.isShiftKeyDown();
         player.setShiftKeyDown(true /* sneaking */);
         try {
-            var result = GroundInventory.get(player.getServer()).place(
+            var result = GroundInventory.get(player.level().getServer()).place(
                     new UseOnContext(player, InteractionHand.MAIN_HAND, hit));
             if (!result.consumesAction()) {
                 throw new IllegalStateException("地面背包夹具放置失败");
             }
         } finally {
             player.setShiftKeyDown(sneaking);
-            player.getInventory().selected = selected;
+            player.getInventory().setSelectedSlot(selected);
         }
         open(player, Blocks.CHEST);
         player.containerMenu.getSlot(0).setByPlayer(new ItemStack(Items.IRON_INGOT));

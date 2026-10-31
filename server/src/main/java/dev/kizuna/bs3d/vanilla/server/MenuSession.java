@@ -16,7 +16,8 @@ import dev.kizuna.inventoryui.server.ServerConnection;
 import dev.kizuna.inventoryui.server.ServerModuleSession;
 import dev.kizuna.inventoryui.server.ServerRequest;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.network.protocol.game.ClientboundSoundPacket;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
@@ -165,7 +166,7 @@ final class MenuSession implements ServerModuleSession<ServerPlayer> {
 
     private void requireCursor(ActionRequest action) {
         // 指纹来自真实光标，而不是客户端声明的物品类型或数量。
-        var fingerprint = StackCodec.fingerprint(handler.getCarried());
+        var fingerprint = StackCodec.fingerprint(handler.getCarried(), connection.context().registryAccess());
         if (!fingerprint.equals(action.getCursorFingerprint())) {
             throw new IllegalArgumentException("光标物品已变化，请重试");
         }
@@ -199,9 +200,19 @@ final class MenuSession implements ServerModuleSession<ServerPlayer> {
 
     private void playCompletion(ItemStack stack) {
         // 每个成功的新操作只播放一次材质声；幂等重试只重发收据。
+        // 26.2 去掉了 playNotifySound，这里按其原实现只给本玩家的连接发声音包，旁人听不到。
         var material = VolumeServer.RULES.material(stack);
-        var sound = BuiltInRegistries.SOUND_EVENT.get(new ResourceLocation(material.sound()));
-        connection.context().playNotifySound(sound, SoundSource.PLAYERS, material.volume(), material.pitch());
+        var sound = BuiltInRegistries.SOUND_EVENT.getValue(Identifier.parse(material.sound()));
+        var player = connection.context();
+        player.connection.send(new ClientboundSoundPacket(
+                BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound),
+                SoundSource.PLAYERS,
+                player.getX(),
+                player.getY(),
+                player.getZ(),
+                material.volume(),
+                material.pitch(),
+                player.getRandom().nextLong()));
     }
 
     private void refreshMenu() {

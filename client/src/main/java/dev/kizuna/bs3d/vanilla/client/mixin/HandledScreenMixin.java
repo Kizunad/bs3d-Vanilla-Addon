@@ -6,19 +6,21 @@ import dev.kizuna.bs3d.vanilla.client.StationPanel;
 import dev.kizuna.bs3d.vanilla.client.VanillaClient;
 import dev.kizuna.inventoryui.client.InventoryUiClient;
 import dev.kizuna.inventoryui.theme.ThemeTokens;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.Slot;
 import org.lwjgl.glfw.GLFW;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
@@ -30,12 +32,11 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
     @Unique private static final int BS3D_PENDING_ALPHA = 0x70000000;
     @Shadow protected int leftPos;
     @Shadow protected int topPos;
-    @Shadow protected int imageWidth;
-    @Shadow protected abstract void renderBg(GuiGraphics context, float delta, int mouseX, int mouseY);
-    @Shadow protected abstract void slotClicked(Slot slot, int slotId, int button, ClickType actionType);
+    @Shadow @Final protected int imageWidth;
+    @Shadow protected abstract void slotClicked(Slot slot, int slotId, int button, ContainerInput input);
 
     @Shadow
-    private Slot findSlot(double x, double y) {
+    private Slot getHoveredSlot(double x, double y) {
         throw new AssertionError();
     }
 
@@ -55,18 +56,20 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
         }
     }
 
-    @Inject(method = "render", at = @At("HEAD"))
+    @Inject(method = "extractContents", at = @At("HEAD"))
     private void bs3dVanilla$render(
-            GuiGraphics context, int mouseX, int mouseY, float delta, CallbackInfo callback) {
+            GuiGraphicsExtractor context, int mouseX, int mouseY, float delta, CallbackInfo callback) {
         // 先画场景，再让原版绘制槽位、光标和悬停提示，保留原版前后关系。
+        // 26.2 的配方书页面重写了 extractRenderState，只调用 extractContents；挂在这里两类页面都能覆盖。
         PlayerInventoryView.arrange((AbstractContainerScreen<?>) (Object) this);
         if (bs3dVanilla$panel != null) {
             bs3dVanilla$panel.draw(context, mouseX, mouseY);
         }
     }
 
-    @Inject(method = "renderSlot", at = @At("HEAD"), cancellable = true)
-    private void bs3dVanilla$pendingSlot(GuiGraphics context, Slot slot, CallbackInfo callback) {
+    @Inject(method = "extractSlot", at = @At("HEAD"), cancellable = true)
+    private void bs3dVanilla$pendingSlot(
+            GuiGraphicsExtractor context, Slot slot, int mouseX, int mouseY, CallbackInfo callback) {
         // 源槽只在网络回执前显示半透明占位，拒绝时原版物品仍在同一位置。
         if (!PlayerInventoryView.visible((AbstractContainerScreen<?>) (Object) this, slot)) {
             callback.cancel();
@@ -92,14 +95,6 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
         return VanillaClient.instance().pendingMenuSlot(menuSlot.index);
     }
 
-    @Redirect(method = "render", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/client/gui/screens/inventory/AbstractContainerScreen;renderBg(Lnet/minecraft/client/gui/GuiGraphics;FII)V"))
-    private void bs3dVanilla$background(AbstractContainerScreen<?> screen, GuiGraphics context,
-                                       float delta, int mouseX, int mouseY) {
-        // 裁接只作用于背景，原版槽位物品和悬停提示仍绘制一次。
-        PlayerInventoryView.drawBackground(screen, context, () -> renderBg(context, delta, mouseX, mouseY));
-    }
-
     @Inject(method = "isHovering(Lnet/minecraft/world/inventory/Slot;DD)Z", at = @At("HEAD"), cancellable = true)
     private void bs3dVanilla$hiddenHit(Slot slot, double mouseX, double mouseY,
                                       CallbackInfoReturnable<Boolean> callback) {
@@ -111,41 +106,34 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
 
     @Inject(method = "mouseClicked", at = @At("HEAD"), cancellable = true)
     private void bs3dVanilla$press(
-            double x, double y, int button, CallbackInfoReturnable<Boolean> callback) {
+            MouseButtonEvent event, boolean doubleClick, CallbackInfoReturnable<Boolean> callback) {
         // 仅消费附属区域或等待中的操作，其他点击继续交给原版。
-        if (bs3dVanilla$panel != null && bs3dVanilla$panel.press(x, y, button)) {
+        if (bs3dVanilla$panel != null && bs3dVanilla$panel.press(event.x(), event.y(), event.button())) {
             callback.setReturnValue(true);
         }
     }
 
     @Inject(method = "mouseDragged", at = @At("HEAD"), cancellable = true)
     private void bs3dVanilla$drag(
-            double x,
-            double y,
-            int button,
-            double dx,
-            double dy,
-            CallbackInfoReturnable<Boolean> callback) {
+            MouseButtonEvent event, double dx, double dy, CallbackInfoReturnable<Boolean> callback) {
         // 场景旋转不触发原版格子分配；普通原版拖放仍走原方法。
-        if (bs3dVanilla$panel != null && bs3dVanilla$panel.drag(x, y, button, dx, dy)) {
+        if (bs3dVanilla$panel != null && bs3dVanilla$panel.drag(event.x(), event.y(), event.button(), dx, dy)) {
             callback.setReturnValue(true);
         }
     }
 
     @Inject(method = "mouseReleased", at = @At("HEAD"), cancellable = true)
-    private void bs3dVanilla$release(
-            double x, double y, int button, CallbackInfoReturnable<Boolean> callback) {
+    private void bs3dVanilla$release(MouseButtonEvent event, CallbackInfoReturnable<Boolean> callback) {
         // 由取得捕获的场景完成落点，避免一次松开同时提交两次物品操作。
-        if (bs3dVanilla$panel != null && bs3dVanilla$panel.release(x, y, button)) {
+        if (bs3dVanilla$panel != null && bs3dVanilla$panel.release(event.x(), event.y(), event.button())) {
             callback.setReturnValue(true);
         }
     }
 
     @Inject(method = "keyPressed", at = @At("HEAD"), cancellable = true)
-    private void bs3dVanilla$key(
-            int key, int scan, int modifiers, CallbackInfoReturnable<Boolean> callback) {
+    private void bs3dVanilla$key(KeyEvent event, CallbackInfoReturnable<Boolean> callback) {
         // ESC 的实际关闭继续由原版负责，附属只负责清理本地选择。
-        if (bs3dVanilla$panel != null && bs3dVanilla$panel.key(key, scan, modifiers)) {
+        if (bs3dVanilla$panel != null && bs3dVanilla$panel.key(event)) {
             callback.setReturnValue(true);
         }
     }
@@ -158,13 +146,14 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
         }
     }
 
-    @Override
-    public boolean mouseScrolled(double x, double y, double amount) {
-        // 只在内景使用滚轮缩放；其他位置保持父类滚动事件。
-        if (bs3dVanilla$panel != null && bs3dVanilla$panel.scroll(x, y, amount)) {
-            return true;
+    @Inject(method = "mouseScrolled", at = @At("HEAD"), cancellable = true)
+    private void bs3dVanilla$scroll(
+            double x, double y, double scrollX, double scrollY, CallbackInfoReturnable<Boolean> callback) {
+        // 只在内景使用纵向滚轮缩放；其他位置保持原版滚动（含收纳袋切换）。
+        // 26.2 的创造页先调用这里再处理自己的滚动条，因此创造页不必另行拦截。
+        if (bs3dVanilla$panel != null && bs3dVanilla$panel.scroll(x, y, scrollY)) {
+            callback.setReturnValue(true);
         }
-        return super.mouseScrolled(x, y, amount);
     }
 
     @Override
@@ -189,11 +178,17 @@ public abstract class HandledScreenMixin extends Screen implements StationHost {
 
     @Override
     public Slot stationSlotAt(double x, double y) {
-        return findSlot(x, y);
+        return getHoveredSlot(x, y);
+    }
+
+    @Override
+    public void stationBackdrop(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
+        // 直接调用 Screen 的实现：只有暗幕与延后字幕，不进入各工作站重写的纹理绘制。
+        super.extractBackground(context, mouseX, mouseY, delta);
     }
 
     @Override
     public void stationClick(Slot slot) {
-        slotClicked(slot, slot.index, GLFW.GLFW_MOUSE_BUTTON_LEFT, ClickType.PICKUP);
+        slotClicked(slot, slot.index, GLFW.GLFW_MOUSE_BUTTON_LEFT, ContainerInput.PICKUP);
     }
 }

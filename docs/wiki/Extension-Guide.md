@@ -18,7 +18,7 @@
 
 ## 玩家区与页面布局接入点
 
-- `PlayerInventoryRows.setVisibleRows(int)`：登记玩家主背包可见行数（1–3，默认 3），只在模组初始化时调用。已适配的工作站与容器页按此行数裁接原版背景、隐藏多余行，并把快捷栏接到最后一条可见行下方；未适配菜单保持原样。这里只改显示，被隐藏槽位的权限由登记行数的附属在服务端负责，例如 Pocket 附属。
+- `PlayerInventoryRows.setVisibleRows(int)`：登记玩家主背包可见行数（1–3，默认 3），只在模组初始化时调用。已适配的工作站与容器页按此行数裁接原版背景、隐藏多余行，并把快捷栏接到最后一条可见行下方；未适配菜单保持原样。这里只改显示，被隐藏槽位的权限由登记行数的附属在服务端负责，例如 Pocket 附属。裁接时暗幕（含延后字幕）经 `StationHost.stationBackdrop` 铺满全屏只画一次，两段裁剪只画工作站纹理；该方法由 `AbstractContainerScreen` 混入实现，页面无需自行提供。
 - `StationHost.stationLayout()`：页面可以提供自己的人物与内景区域，默认放在原版工作站两侧。
 - `StationHost.stationSlotVisible(Slot)`：页面可以隐藏部分原版槽位，被隐藏的槽位不绘制，也不参与悬停与点击命中。
 - `SlotPosition`：只改原版槽位坐标的访问器，不替换带装备与绑定诅咒检查的原版槽对象。

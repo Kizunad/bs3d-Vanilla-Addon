@@ -4,7 +4,7 @@ import dev.kizuna.backpack3d.protocol.PlayerSlots;
 import dev.kizuna.backpack3d.protocol.StackCodec;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.PlayerSlot;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
 
 /** 在当前页面的光标与模型部位之间操作，部位规则仍由原版玩家 AbstractContainerMenu 决定。 */
@@ -14,11 +14,11 @@ final class PlayerCursor {
     static void click(ServerPlayer player, PlayerSlot request) {
         // 槽号采用 Inventory 体系，不把工作站的 slot.id 当作身体部位。
         int index = request.getSlot();
-        if (!PlayerSlots.isInteractive(index, player.getInventory().selected)) {
+        if (!PlayerSlots.isInteractive(index, player.getInventory().getSelectedSlot())) {
             throw new IllegalArgumentException("只能选择当前双手或盔甲部位");
         }
         ItemStack stack = player.getInventory().getItem(index);
-        if (!StackCodec.fingerprint(stack).equals(request.getFingerprint())) {
+        if (!StackCodec.fingerprint(stack, player.registryAccess()).equals(request.getFingerprint())) {
             throw new IllegalArgumentException("部位物品已变化");
         }
         if (PlayerSlots.bindingLocked(index, stack, player.isCreative())) {
@@ -36,7 +36,7 @@ final class PlayerCursor {
                         .orElseThrow(() -> new IllegalArgumentException("部位槽位不存在"));
         if (active == body) {
             // E 页本来就持有玩家光标，不需要借用和归还。
-            body.clicked(slot.index, 0, ClickType.PICKUP, player);
+            body.clicked(slot.index, 0, ContainerInput.PICKUP, player);
             return;
         }
         if (!body.getCarried().isEmpty()) {
@@ -46,7 +46,7 @@ final class PlayerCursor {
         body.setCarried(active.getCarried());
         active.setCarried(ItemStack.EMPTY);
         try {
-            body.clicked(slot.index, 0, ClickType.PICKUP, player);
+            body.clicked(slot.index, 0, ContainerInput.PICKUP, player);
         } finally {
             active.setCarried(body.getCarried());
             body.setCarried(ItemStack.EMPTY);

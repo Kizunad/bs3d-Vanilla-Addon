@@ -1,6 +1,7 @@
 package dev.kizuna.bs3d.vanilla.client;
 
 import dev.kizuna.bs3d.vanilla.protocol.VanillaMenus;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.world.inventory.Slot;
 
@@ -18,6 +19,9 @@ public interface StationHost {
 
     /** 以原版页面自身的点击入口操作页面槽，页面专有的槽位规则随之生效。 */
     void stationClick(Slot slot);
+
+    /** 只画原版页面的暗幕层（含延后字幕），不画工作站纹理；裁接纹理时暗幕只铺一次。 */
+    void stationBackdrop(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta);
 
     default StationLayout stationLayout() {
         // 默认场景使用原版工作站两侧，附属可为玩家 E 页提供专用区域。

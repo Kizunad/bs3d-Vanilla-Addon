@@ -2,7 +2,7 @@ package dev.kizuna.bs3d.vanilla.client;
 
 import dev.kizuna.bs3d.vanilla.protocol.VanillaMenus;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.Slot;
@@ -12,6 +12,7 @@ public final class PlayerInventoryView {
     public static final int SLOT_PITCH_PIXELS = 18;
     private static final int SLOT_BORDER_PIXELS = 1;
     private static final int HOTBAR_GAP_PIXELS = 4;
+    private static boolean textureOnly;
 
     private PlayerInventoryView() {
         // 所有库存值仍从原版槽位读取。
@@ -47,7 +48,12 @@ public final class PlayerInventoryView {
         }
     }
 
-    public static void drawBackground(AbstractContainerScreen<?> screen, GuiGraphics context, Runnable original) {
+    /**
+     * @param backdrop 只画原版暗幕层
+     * @param original 页面完整的背景绘制（暗幕层加工作站纹理）
+     */
+    public static void drawBackground(
+            AbstractContainerScreen<?> screen, GuiGraphicsExtractor context, Runnable backdrop, Runnable original) {
         // 背景在最后一条可见行的下边框处切开，下半段整体上移，方块槽位纹理不重写。
         Slot first = stationMainSlot(screen);
         int visibleRows = PlayerInventoryRows.visibleRows();
@@ -58,15 +64,25 @@ public final class PlayerInventoryView {
         }
         int frameTop = ((StationHost) screen).stationTop() + first.y - SLOT_BORDER_PIXELS;
         int cut = frameTop + visibleRows * SLOT_PITCH_PIXELS;
+        // 26.2 各工作站在同一个背景方法里先画暗幕再画纹理；暗幕铺满全屏只画一次，
+        // 两段裁剪期间由 ScreenBackgroundMixin 跳过暗幕，避免上移后底部留出无暗幕的空带。
+        backdrop.run();
+        textureOnly = true;
         context.enableScissor(0, 0, screen.width, cut);
         original.run();
         context.disableScissor();
         context.enableScissor(0, cut, screen.width, screen.height);
-        context.pose().pushPose();
-        context.pose().translate(0, -removedRows * SLOT_PITCH_PIXELS, 0);
+        context.pose().pushMatrix();
+        context.pose().translate(0, -removedRows * SLOT_PITCH_PIXELS);
         original.run();
-        context.pose().popPose();
+        context.pose().popMatrix();
         context.disableScissor();
+        textureOnly = false;
+    }
+
+    /** 裁接纹理的两段绘制期间为 true，此时原版暗幕已经画过。 */
+    public static boolean textureOnly() {
+        return textureOnly;
     }
 
     private static Slot stationMainSlot(AbstractContainerScreen<?> screen) {

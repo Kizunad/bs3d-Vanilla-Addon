@@ -93,7 +93,7 @@ def run_mode(command, mode, run_id, port):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--java-home", type=Path,
-                        help="运行 Gradle 的 JDK；Loom 1.13 起须为 Java 21，省略时沿用当前环境")
+                        help="运行 Gradle 的 JDK；Loom 1.19 与 Minecraft 26.2 须为 Java 25，省略时沿用当前环境")
     parser.add_argument("--mode", choices=["both", "dedicated", "integrated"], default="both")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help="独服验收端口；已占用时使用其他端口，不处理现有服务器")

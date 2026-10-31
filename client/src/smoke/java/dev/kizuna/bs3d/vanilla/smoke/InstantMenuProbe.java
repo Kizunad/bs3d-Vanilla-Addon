@@ -11,9 +11,10 @@ import dev.kizuna.bs3d.vanilla.client.VanillaClient;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
-import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.world.inventory.Slot;
 
 /** 用真实按键状态和页面输入覆盖双向快捷搬运及合盖模型落点。 */
@@ -22,6 +23,8 @@ final class InstantMenuProbe {
     private static final int SLOT_CENTER_PIXELS = 8;
     private static final long INITIAL_REVISION = 4;
     private static final float MODEL_SEARCH_DEGREES = 15;
+    /** 合成的左键输入不带修饰键；Shift 由 SmokeShift 设置真实按键状态。 */
+    private static final MouseButtonInfo LEFT = new MouseButtonInfo(0, 0);
     private int step;
     private int ticks;
     private ByteString moved;
@@ -70,7 +73,7 @@ final class InstantMenuProbe {
                 if (addon.volume().state().getRevision() != INITIAL_REVISION + 1) {
                     return false;
                 }
-                moved = StackCodec.fingerprint(screen.getMenu().getSlot(0).getItem());
+                moved = StackCodec.fingerprint(screen.getMenu().getSlot(0).getItem(), Minecraft.getInstance().player.registryAccess());
                 var host = (StationHost) screen;
                 var layout = StationLayout.beside(
                         screen.width, screen.height, host.stationLeft(), host.stationWidth());
@@ -111,7 +114,7 @@ final class InstantMenuProbe {
                 SmokeShift.press();
             }
             case 5 -> {
-                if (!Screen.hasShiftDown()) {
+                if (!Minecraft.getInstance().hasShiftDown()) {
                     return false;
                 }
                 click(screen, itemPoint(screen, bag));
@@ -124,12 +127,12 @@ final class InstantMenuProbe {
                 SmokeShift.press();
             }
             case 7 -> {
-                if (!Screen.hasShiftDown()) {
+                if (!Minecraft.getInstance().hasShiftDown()) {
                     return false;
                 }
                 Slot source = screen.getMenu().slots.stream()
                         .filter(slot -> slot.container == client.player.getInventory())
-                        .filter(slot -> StackCodec.fingerprint(slot.getItem()).equals(moved))
+                        .filter(slot -> StackCodec.fingerprint(slot.getItem(), Minecraft.getInstance().player.registryAccess()).equals(moved))
                         .findFirst().orElseThrow();
                 click(screen, slotPoint(screen, source));
                 SmokeShift.release();
@@ -139,7 +142,7 @@ final class InstantMenuProbe {
                     return false;
                 }
                 screen.onClose();
-                client.setScreen(new InventoryScreen(client.player));
+                client.gui.setScreen(new InventoryScreen(client.player));
             }
             default -> throw new IllegalStateException("未知快捷搬运验收步骤");
         }
@@ -164,7 +167,7 @@ final class InstantMenuProbe {
                     return false;
                 }
                 Screenshot.grab(client.gameDirectory, "instant-e-page.png",
-                        client.getMainRenderTarget(), message -> {});
+                        client.gameRenderer.mainRenderTarget(), 1, message -> {});
                 client.getConnection().sendCommand("vanilla-fixture-ground");
             }
             case 10 -> {
@@ -179,7 +182,7 @@ final class InstantMenuProbe {
                     player.rotate(MODEL_SEARCH_DEGREES, 0);
                     return false;
                 }
-                moved = StackCodec.fingerprint(screen.getMenu().getSlot(0).getItem());
+                moved = StackCodec.fingerprint(screen.getMenu().getSlot(0).getItem(), Minecraft.getInstance().player.registryAccess());
                 drag(screen, slotPoint(screen, screen.getMenu().getSlot(0)), target);
             }
             default -> throw new IllegalStateException("未知地面存入步骤");
@@ -211,7 +214,7 @@ final class InstantMenuProbe {
             }
             case 13 -> {
                 return addon.volume().state().getRevision() == INITIAL_REVISION + 7
-                        && StackCodec.fingerprint(screen.getMenu().getSlot(0).getItem()).equals(moved);
+                        && StackCodec.fingerprint(screen.getMenu().getSlot(0).getItem(), Minecraft.getInstance().player.registryAccess()).equals(moved);
             }
             default -> throw new IllegalStateException("未知地面验收步骤");
         }
@@ -227,7 +230,7 @@ final class InstantMenuProbe {
         for (int y = 0; y < screen.height; y++) {
             for (int x = 0; x < screen.width; x++) {
                 String item = interior.itemAt(x, y);
-                if (!item.isEmpty() && (moved == null || StackCodec.fingerprint(volume.stack(item)).equals(moved))) {
+                if (!item.isEmpty() && (moved == null || StackCodec.fingerprint(volume.stack(item), Minecraft.getInstance().player.registryAccess()).equals(moved))) {
                     return new int[] {x, y};
                 }
             }
@@ -256,15 +259,17 @@ final class InstantMenuProbe {
 
     private static void click(AbstractContainerScreen<?> screen, int[] point) {
         // 完整按下和松开，防止保留上一次拖动捕获。
-        screen.mouseClicked(point[0], point[1], 0);
-        screen.mouseReleased(point[0], point[1], 0);
+        var event = new MouseButtonEvent(point[0], point[1], LEFT);
+        screen.mouseClicked(event, false /* doubleClick */);
+        screen.mouseReleased(event);
     }
 
     private static void drag(AbstractContainerScreen<?> screen, int[] source, int[] target) {
         // 落点确定后只提交一次 MOVE，客户端不补发原版槽位点击。
-        screen.mouseClicked(source[0], source[1], 0);
-        screen.mouseDragged(target[0], target[1], 0, target[0] - source[0], target[1] - source[1]);
-        screen.mouseReleased(target[0], target[1], 0);
+        screen.mouseClicked(new MouseButtonEvent(source[0], source[1], LEFT), false /* doubleClick */);
+        var end = new MouseButtonEvent(target[0], target[1], LEFT);
+        screen.mouseDragged(end, target[0] - source[0], target[1] - source[1]);
+        screen.mouseReleased(end);
     }
 
     private static <T> T read(Object object, String name, Class<T> type) {
