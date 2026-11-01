@@ -15,6 +15,7 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
@@ -34,6 +35,8 @@ import java.util.UUID;
 
 /** 隔离世界的真实原版方块和物品夹具，不打入生产 JAR。 */
 public final class VanillaFixture implements ModInitializer {
+    // 夹具容器用 BS3D 自带的 Bong 灵草囊，腰挂。
+    private static final Identifier POUCH = Identifier.fromNamespaceAndPath("bs3d", "herb_pouch");
     private static final int FIXTURE_SLOT = 8;
     private static final int DISTANCE_BLOCKS = 2;
     private static final double BLOCK_CENTER = 0.5;
@@ -104,7 +107,7 @@ public final class VanillaFixture implements ModInitializer {
         if (account.data().getRevision() > 0) {
             return;
         }
-        var pouch = ContainerItems.create(ContainerItems.POUCH);
+        var pouch = ContainerItems.create(POUCH);
         String bag = ContainerItems.identity(pouch);
         var logs =
                 Item.newBuilder()
@@ -162,7 +165,7 @@ public final class VanillaFixture implements ModInitializer {
         player.closeContainer();
         int selected = player.getInventory().getSelectedSlot();
         player.getInventory().setSelectedSlot(FIXTURE_SLOT);
-        player.getInventory().setItem(FIXTURE_SLOT, ContainerItems.create(ContainerItems.POUCH));
+        player.getInventory().setItem(FIXTURE_SLOT, ContainerItems.create(POUCH));
         var support = player.blockPosition().south(DISTANCE_BLOCKS).below();
         var hit = new BlockHitResult(Vec3.atCenterOf(support).add(0, BLOCK_CENTER, 0),
                 Direction.UP, support, false /* insideBlock */);

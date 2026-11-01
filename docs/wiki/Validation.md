@@ -1,5 +1,11 @@
 # 验证记录
 
+## 2026-11-02：验收夹具改用灵草囊
+
+BS3D 删除草包、背篓、收纳箱，验收夹具的随身容器与地面放置容器由草包改为 BS3D 自带的 Bong 灵草囊（`bs3d:herb_pouch`，仍挂腰部右前）。正式代码不变。
+
+Java 25 `test --rerun build compileSmokeJava :client:compileSmokeJava` 通过：附属客户端 **3 项**、服务端 **2 项**，无失败或跳过，日志为 `build/tabclean-test-build.log`。真实 Fabric 专服与 Xvfb 客户端两种模式通过，`build/smoke/1b7935e20427-dedicated/client/vanilla-ok.txt` 与 `build/smoke/1b7935e20427-integrated/client/vanilla-ok.txt` 的覆盖项与 2026-11-01 记录逐字相同，日志为 `build/tabclean-smoke.log`。
+
 ## 2026-11-01：迁移到 Minecraft 26.2 / Java 25
 
 运行环境改为 Minecraft 26.2、Fabric Loader 0.20.1、Fabric API 0.161.0+26.2、owo 0.13.1+26.2、Java 25，构建使用 Gradle 9.8.0、Fabric Loom 1.19.3。功能、业务协议 **v2** 与保存格式不变，配套 BS3D 为同日迁移的 26.2 版本。
