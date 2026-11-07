@@ -79,6 +79,7 @@ tasks.register('protocolZip', Zip) {
     archiveFileName = 'bs3d-vanilla-addon-0.1.0-SNAPSHOT-proto.zip'
     destinationDirectory = layout.buildDirectory.dir('distributions')
     from('shared/src/main/proto')
+    from(new File(kizunaWorkspace.directory('bs3d'), 'shared/src/main/proto')) { include 'volume.proto' }
     from(new File(frameworkDir, 'src/main/proto'))
     from(project(':server').layout.buildDirectory.file('descriptors/vanilla-v1.desc')) { into 'descriptors' }
     from('LICENSE')

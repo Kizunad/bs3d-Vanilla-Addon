@@ -114,3 +114,36 @@ python3 scripts/smoke.py --mode both
 ```
 
 参数 `--mode dedicated` / `integrated` 选择环境；`--port` 变更本地验收端口。脚本只管理自己创建的进程组，不处理已有游戏或服务器。日志、截图与通过标记留在 `build/smoke/`。运行期间不要在同一工作区执行另一轮构建，以免重写正在加载的类文件。
+# 2026-11-03：原版菜单模型穿脱
+
+未发布业务协议 v3，与包含穿戴接口的 BS3D v8 配套更新。新增 `DragTransfer.worn`，
+共用 BS3D 模型命中与卸装菜单，服务端继续使用本仓的菜单／指纹／光标／回滚事务。
+协议 ZIP 同时包含新增 import 所需的 `volume.proto`。
+
+三仓组合构建通过；本仓 client 3 项、server 2 项测试通过。
+Gear 客户端验收的无 PA `model-equipment-vanilla-i` 与含 PA `model-equipment-pa-j` 两轮均通过，
+每轮 421 步、21 张截图（包含非 Vanilla 入口）。实际打开生存 E 页、服务器箱子页和创造库存页，
+各自拖入／卸下战装套装和腰带，并验证右拖旋转；E 页另验证完整目录翻页、满库存拒绝和清空刷新。
+截图已经人工查看；日志、XML 和哈希索引在 Gear 工作区 `build/model-equipment-review/`。
+
+其他工作站沿用同一 StationPanel，未逐页重跑。未重跑专服、远程多人或 Windows Native。
+创造页仅客户端光标仍提示先放进真实槽，实际验证的是服务器库存槽来源；没有允许客户端 NBT 创建库存。
+最后缓存重复读取后已另跑构建／单测，真实截图对应该整理前的相同行为。
+
+## 2026-11-03：创造类别页直接穿戴与接管复核
+
+创造类别页现在可以把仅在光标上的装备直接拖到 BS3D 玩家模型。客户端先通过原版创造
+授权包写入一个可见空槽，再提交真实槽的穿戴意图；库存满时保留光标和原库存。
+BS3D 在候选副本内初始化新装备身份，来源校验仍使用原栈指纹，损坏的身份标签直接拒绝。
+
+主会话独立复核并通过 Gear 的两组真实客户端操作：含 PA/Pocket，以及不含 PA/Pocket，
+每组 455 个检查、24 张截图。覆盖独立页面、工作区、生存 E 页、箱子、创造库存页与类别页；
+Gear 战甲和 BS3D 腰带直接穿戴后，服务端归属唯一，卸下只返回一个实物。
+全部截图已查看。Gear、BS3D、Vanilla、Pocket 组合构建和单测最终通过。
+
+原始命令和退出码保存在远程会话目录 `handoff/gear-wayfarer-owner-review/`。
+含 PA/Pocket 的客户端通过标记为 Gear 的
+`build/clienttest/owner-review-pa-pocket-3/result.txt`；该组合命令末尾因 Pocket 测试夹具编译失败
+退出 1，修正后由 `gear-final-vanilla.json` 记录完整构建退出 0。
+无 PA/Pocket 的客户端通过标记为 `build/clienttest/owner-review-vanilla-final/result.txt`。
+没有更新正在运行的 Windows 实例；专服多人和其他工作站特殊控件未在本轮重跑。

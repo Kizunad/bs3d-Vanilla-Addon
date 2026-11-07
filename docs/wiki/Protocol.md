@@ -1,6 +1,6 @@
 # 通信契约
 
-业务源为 `shared/src/main/proto/vanilla.proto`，包 `kizuna.bs3d.vanilla.v1`，业务版本 2。外层复用 Framework wire v2，模块 `bs3d_vanilla:menus`，不注册额外网络通道。
+业务源为 `shared/src/main/proto/vanilla.proto`，包 `kizuna.bs3d.vanilla.v1`，业务版本 3。外层复用 Framework wire v2，模块 `bs3d_vanilla:menus`，不注册额外网络通道。两端须同步更新，并使用包含穿戴接口的 BS3D v8 未发布源码。
 
 | 消息 | 方向 | 内容 |
 | --- | --- | --- |
@@ -18,7 +18,7 @@
 
 `oneof action`：
 
-- `transfer`：原版槽位/模型部位/内景/光标来源，以及原版槽位/部位/容器/自动原版库存落点。模型使用 auto_place；随身快捷目标为 carried。
+- `transfer`：原版槽位/模型部位/内景/光标来源，以及原版槽位/部位/容器/穿戴/自动原版库存落点。容器收纳使用 auto_place；随身快捷目标为 carried。
 - `open_scene`：当前页面首次显示场景时申请附近地面根的访问租约，不携带容器 UUID 或世界坐标。关闭页面释放租约。
 - `take_item`：随身树中的物品实例 UUID，取出整栈到空光标。
 - `store_cursor`：容器 UUID、X/Y/Z 格坐标及 0..23 朝向，存入整个真实光标栈。
@@ -26,6 +26,12 @@
 - `cancel_operation`：兼容空操作，即时事务不存在取消阶段。
 
 服务端拒绝未知字段、失效页面、无效身份、错误指纹、非身体槽位、不可用玩家及容器；背包体积、嵌套、重复实例身份由 BS3D 重新验证。
+
+`DragTransfer.target.worn` 为新增字段 9，类型复用 BS3D `volume.proto` 的 `Placement`。
+客户端只指定声明层或合法容器挂点，不上传骨名或物品 NBT；服务端用
+`CursorTransfer.Request.wear` 验证真实来源、全部占层和原版甲互斥。
+右键模型卸装使用已有 `item → player_inventory` 事务；空间不足时整件回滚，
+包括嵌套内容。创造页只在客户端的光标栈仍须先放进真实槽位，不能凭展示栈创建库存。
 
 每个页面缓存最近 128 个操作收据。相同请求重发只返回原收据，不再次取物；同号不同参数拒绝。跨页面请求因 `menu` 改变而失效。客户端不能把 S2C 状态作为 C2S 请求提交。
 

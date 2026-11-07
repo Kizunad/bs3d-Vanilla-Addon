@@ -5,6 +5,7 @@ import dev.kizuna.backpack3d.client.BagAnimation;
 import dev.kizuna.backpack3d.client.InteriorRenderer;
 import dev.kizuna.backpack3d.client.LayerRangeSlider;
 import dev.kizuna.backpack3d.client.ModelResources;
+import dev.kizuna.backpack3d.client.ModelEquipment;
 import dev.kizuna.backpack3d.client.VolumeModule;
 import dev.kizuna.backpack3d.client.WornPreview;
 import dev.kizuna.backpack3d.client.InteriorRenderer.Rect;
@@ -35,7 +36,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
 /** 原版操作区两侧的玩家与背包场景；不重绘工作站槽位，也不接管配方按钮。 */
-public final class StationPanel {
+public final class StationPanel implements WornPreview.EquipmentActions {
     private static final int GAP_PIXELS = 4;
     private static final int BUTTON_PIXELS = 16;
     private static final int DRAG_THRESHOLD_SQUARED_PIXELS = 9;
@@ -61,6 +62,7 @@ public final class StationPanel {
     private boolean rotatingInterior;
     private boolean sliding;
     private boolean moved;
+    private boolean equipmentClick;
     private double pressX;
     private double pressY;
     private int mouseX;
@@ -75,7 +77,7 @@ public final class StationPanel {
         host = (StationHost) screen;
         addon = VanillaClient.instance();
         volume = addon.volume();
-        player = new WornPreview(volume);
+        player = new WornPreview(volume, this);
     }
 
     private StationLayout layout() {
@@ -119,6 +121,7 @@ public final class StationPanel {
         drawInfo(context, layout);
         player.drawDropTarget(context, Minecraft.getInstance().font, mx, my);
         drawFeedback(context, layout, mx, my);
+        player.drawEquipmentMenu(context, new Rect(0, 0, screen.width, screen.height), mx, my);
     }
 
     private boolean openScene() {
@@ -145,7 +148,11 @@ public final class StationPanel {
         } else if (!screen.getMenu().getCarried().isEmpty()) {
             source = "cursor";
         }
-        player.dropSource(source);
+        ItemStack stack = screen.getMenu().getCarried();
+        if (selection != null) {
+            stack = sourceStack(selection);
+        }
+        player.dropSource(source, stack);
         // 画中画铺满整个页面且不加平移，命中缓存与鼠标同为屏幕坐标，人物也不会被裁在小框里。
         player.draw(
                 context,
@@ -156,7 +163,7 @@ public final class StationPanel {
                 scale,
                 mx,
                 my,
-                !help && !addon.busy() && body.contains(mx, my),
+                !help && !busy() && !player.equipmentMenuVisible() && body.contains(mx, my),
                 animations);
     }
 
@@ -172,7 +179,7 @@ public final class StationPanel {
                     color(ThemeTokens.ACCENT));
         }
         // 模型和内景共用原版物品 tooltip，简介由 BS3D 已注册的回调追加。
-        if (!addon.busy() && screen.getMenu().getCarried().isEmpty() && !help) {
+        if (!busy() && screen.getMenu().getCarried().isEmpty() && !help && !player.equipmentMenuVisible()) {
             ItemStack hovered = hovered(mx, my);
             if (!hovered.isEmpty()) {
                 context.setTooltipForNextFrame(font, hovered, mx, my);
@@ -277,7 +284,7 @@ public final class StationPanel {
             var lines =
                     font.split(
                             Component.literal(
-                                    "点击身上背包打开内景。\n"
+                                    "装备拖到人物即可穿戴；右键人物选择脱掉装备。\n"
                                             + "双手、盔甲和内景物品可拖到原版槽位；反向拖动可存回。\n"
                                             + "拖动空白处旋转，滚轮缩放内景。R/T 旋转待存物品，范围条选择可见层。\n"
                                             + "Shift 双向快捷搬运；拖到容器模型自动放入；ESC 关闭。"),
@@ -298,6 +305,11 @@ public final class StationPanel {
         // 原版槽位先于人物和内景解析，按下时只记录来源。
         if (!enabled()) {
             return false;
+        }
+        if (player.clickEquipmentMenu(x, y, button)) {
+            resetCapture();
+            equipmentClick = true;
+            return true;
         }
         if (addon.busy()) {
             return true;
@@ -331,7 +343,7 @@ public final class StationPanel {
     }
 
     private boolean pressOther(double x, double y, int button, StationLayout layout) {
-        // 原版槽位的右键分堆交给原版；人物区按住右键拖动只旋转模型。
+        // 原版槽位右键分堆仍由原版处理；人物右拖旋转，未拖动的释放打开装备列表。
         if (host.stationSlotAt(x, y) != null) {
             return false;
         }
@@ -367,9 +379,17 @@ public final class StationPanel {
 
     private boolean pressPlayer(double x, double y) {
         // 模型命中优先于身体部位，携物点击模型使用自动寻位。
+        ItemStack cursor = screen.getMenu().getCarried();
+        var worn = player.equipmentAt(x, y, cursor);
+        if (worn != null) {
+            submit(DragTransfer.newBuilder()
+                    .setCursor(true /* cursor */)
+                    .setWorn(worn));
+            return true;
+        }
         String bag = player.pick(x, y);
         if (!bag.isEmpty()) {
-            if (screen.getMenu().getCarried().isEmpty()) {
+            if (cursor.isEmpty()) {
                 open(bag);
             } else {
                 var target = automatic(bag);
@@ -382,7 +402,7 @@ public final class StationPanel {
         int slot = player.slotAt(x, y);
         if (slot < 0) {
             rotatingPlayer = true;
-        } else if (screen.getMenu().getCarried().isEmpty()) {
+        } else if (cursor.isEmpty()) {
             selectBody(slot);
         } else {
             dropOnBody(slot);
@@ -578,9 +598,14 @@ public final class StationPanel {
     }
 
     private void submit(DragTransfer.Builder transfer) {
-        // 请求发出前不碰原版光标，回执无需再补一次客户端点击；本地光标携物时只提示，不提交。
+        // 创造穿戴先经原版写槽，其余请求不预测修改光标；回执不再补客户端点击。
         if (localCursor()) {
-            addon.reject(LOCAL_CURSOR_DETAIL);
+            var request = transfer.build();
+            if (request.hasCursor() && request.hasWorn()) {
+                CreativeEquipment.wear(screen, request);
+            } else {
+                addon.reject(LOCAL_CURSOR_DETAIL);
+            }
             resetCapture();
             return;
         }
@@ -614,6 +639,13 @@ public final class StationPanel {
             resetCapture();
             return false;
         }
+        if (equipmentClick) {
+            equipmentClick = false;
+            return true;
+        }
+        if (rotatingPlayer && !moved && button == GLFW.GLFW_MOUSE_BUTTON_RIGHT) {
+            player.openEquipmentMenu(x, y);
+        }
         boolean camera = sliding || rotatingPlayer || rotatingInterior;
         sliding = false;
         rotatingPlayer = false;
@@ -621,6 +653,11 @@ public final class StationPanel {
         if (camera || addon.busy()) {
             return true;
         }
+        return releaseTransfer(x, y, button);
+    }
+
+    private boolean releaseTransfer(double x, double y, int button) {
+        // 非相机释放才解析来源与落点，菜单点击不会透传为放置光标。
         if (button != GLFW.GLFW_MOUSE_BUTTON_LEFT) {
             return false;
         }
@@ -629,7 +666,14 @@ public final class StationPanel {
             return true;
         }
         if (selection == null && localCursor()) {
-            // 本地光标的放置交给原版；场景内的松开由场景消费，不被原版当作窗口外丢出。
+            var worn = player.equipmentAt(x, y, screen.getMenu().getCarried());
+            if (worn != null) {
+                submit(DragTransfer.newBuilder()
+                        .setCursor(true /* cursor */)
+                        .setWorn(worn));
+                return true;
+            }
+            // 非装备光标的放置交给原版，场景内松开不能被当作窗口外丢出。
             return inScene(x, y);
         }
         DragTransfer source = releaseSource();
@@ -704,6 +748,10 @@ public final class StationPanel {
             return source.setDestination(target);
         }
         if (layout().player().contains(x, y)) {
+            var worn = player.equipmentAt(x, y, sourceStack(source.build()));
+            if (worn != null) {
+                return source.setWorn(worn);
+            }
             String bag = player.pick(x, y);
             if (!bag.isEmpty()) {
                 return source.setBag(automatic(bag));
@@ -720,6 +768,45 @@ public final class StationPanel {
         return null;
     }
 
+    private ItemStack sourceStack(DragTransfer source) {
+        // 来源仍保留在真实槽位或光标，展示读取不改变原版栈。
+        return switch (source.getSourceCase()) {
+            case ITEM -> volume.stack(source.getItem());
+            case BODY -> Minecraft.getInstance().player.getInventory().getItem(source.getBody().getSlot());
+            case SLOT -> {
+                Slot page = findPageSlot(target -> target.index == source.getSlot().getSlot());
+                if (page == null) {
+                    yield ItemStack.EMPTY;
+                }
+                yield page.getItem();
+            }
+            case CURSOR -> screen.getMenu().getCarried();
+            default -> ItemStack.EMPTY;
+        };
+    }
+
+    @Override
+    public boolean busy() {
+        return addon.busy() || volume.busy();
+    }
+
+    @Override
+    public String status() {
+        return addon.detail();
+    }
+
+    @Override
+    public void unequip(String item, long revision) {
+        // 卸装沿用当前页面的来源指纹、光标、归属与回滚规则。
+        if (!enabled() || busy() || volume.state().getRevision() != revision
+                || ModelEquipment.worn(volume.state()).stream().noneMatch(entry -> entry.id().equals(item))) {
+            return;
+        }
+        submit(DragTransfer.newBuilder()
+                .setItem(item)
+                .setPlayerInventory(true /* playerInventory */));
+    }
+
     private String itemAt(double x, double y) {
         // 仅查询当前已展开内景，不能沿用被关闭窗口的旧命中。
         if (active.isEmpty() || minimized || !viewport().contains(x, y)) {
@@ -733,6 +820,9 @@ public final class StationPanel {
     }
 
     public boolean scroll(double x, double y, double amount) {
+        if (enabled() && player.scrollEquipmentMenu(amount)) {
+            return true;
+        }
         if (enabled() && !active.isEmpty() && !minimized && viewport().contains(x, y)) {
             var interior = interiors.get(active);
             if (interior != null) {
@@ -747,6 +837,12 @@ public final class StationPanel {
         // 旋转键沿用 BS3D 配置，只有选中物品时消费输入。
         if (!enabled()) {
             return false;
+        }
+        if (player.equipmentMenuVisible()) {
+            if (event.key() == GLFW.GLFW_KEY_ESCAPE) {
+                player.closeEquipmentMenu();
+            }
+            return true;
         }
         if (event.key() == GLFW.GLFW_KEY_ESCAPE
                 || Minecraft.getInstance().options.keyInventory.matches(event)) {
@@ -773,6 +869,7 @@ public final class StationPanel {
     public void removed() {
         // 页面关闭立即释放地面访问，不让已消失的模型继续占用其他玩家的租约。
         volume.closeGround("");
+        player.closeEquipmentMenu();
         resetCapture();
     }
 

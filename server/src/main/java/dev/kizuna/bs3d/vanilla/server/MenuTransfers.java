@@ -153,6 +153,10 @@ final class MenuTransfers {
                 transaction.exchange(destination(revision, transfer.getBag()));
             }
             case DESTINATION -> putSlot(player, menuSlot(player, transfer.getDestination()));
+            case WORN -> {
+                long revision = ((PlayerStorage) player).bs3d$getInventory().getRevision();
+                transaction.exchange(CursorTransfer.Request.wear(revision, transfer.getWorn()));
+            }
             case BODY_DESTINATION -> PlayerCursor.click(player, transfer.getBodyDestination());
             case PLAYER_INVENTORY -> {
                 if (!transfer.getPlayerInventory()) {

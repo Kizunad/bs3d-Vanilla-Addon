@@ -2,6 +2,7 @@ syntax = "proto3";
 package kizuna.bs3d.vanilla.v1;
 option java_package = "dev.kizuna.bs3d.vanilla.protocol.pb";
 option java_outer_classname = "VanillaProtocol";
+import "volume.proto";
 
 // C2S：订阅当前连接自己的原版页面。没有选择其他玩家或远程方块的入口。
 message SubscribeRequest {}
@@ -45,6 +46,7 @@ message DragTransfer {
     MenuSlot destination = 6;
     PlayerSlot body_destination = 7;
     bool player_inventory = 8;
+    kizuna.backpack3d.v1.Placement worn = 9; // 模型落点，复用 BS3D 服务端类型与占层校验。
   }
 }
 message PlayerSlot {

@@ -28,7 +28,7 @@
 - `StationHost.stationSupported()`：是否创建场景，默认按 `VanillaMenus` 适配表判断服务器菜单。
 - `StationHost.stationActive()`：当前页签是否显示场景，默认始终显示。
 - `StationHost.stationMenuSlot(Slot)`：把页面槽换成服务器菜单里的真实槽，默认就是页面槽本身；返回 `null` 表示该槽只存在于客户端页面（如创造页删除格），场景不对它提交事务。
-- `StationHost.stationSharedCursor()`：光标是否由服务器同步，默认是。返回 `false` 时光标只在客户端：携物期间不发事务（包括建立场景），以免指纹被拒后的全量同步清掉本地光标。
+- `StationHost.stationSharedCursor()`：光标是否由服务器同步，默认是。返回 `false` 时不能把本地光标当作服务器来源；创造装备入口先经原版授权写入可见空槽，再以真实槽提交穿戴，其余携物交互遵循原版或提示先放入槽位。
 - `StationHost.stationClick(Slot)`：以页面自身的原版点击入口点一次页面槽，由 `AbstractContainerScreen` 混入实现，页面专有的点击规则（如创造写入）随之生效。
 
 ## 背包事务

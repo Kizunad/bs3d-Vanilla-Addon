@@ -17,7 +17,7 @@ public final class VanillaMessages {
     public static final String SUBSCRIBE = "bs3d_vanilla:subscribe";
     public static final String ACTION = "bs3d_vanilla:action";
     public static final String STATE = "bs3d_vanilla:state";
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
     private static final int RETIRED_ELAPSED_FIELD = 5;
     private static final int RETIRED_DURATION_FIELD = 6;
 
