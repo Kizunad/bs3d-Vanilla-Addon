@@ -287,7 +287,8 @@ public final class StationPanel implements WornPreview.EquipmentActions {
                                     "装备拖到人物即可穿戴；右键人物选择脱掉装备。\n"
                                             + "双手、盔甲和内景物品可拖到原版槽位；反向拖动可存回。\n"
                                             + "拖动空白处旋转，滚轮缩放内景。R/T 旋转待存物品，范围条选择可见层。\n"
-                                            + "Shift 双向快捷搬运；拖到容器模型自动放入；ESC 关闭。"),
+                                            + "按住 " + volume.openKeyName() + " 点物品双向快捷搬运；Shift 点击照原版；\n"
+                                            + "拖到容器模型自动放入；ESC 关闭。"),
                             area.width());
             int bottom = area.y() + lines.size() * (font.lineHeight + GAP_PIXELS) + GAP_PIXELS * 2;
             context.fill(
@@ -355,7 +356,7 @@ public final class StationPanel implements WornPreview.EquipmentActions {
     }
 
     private boolean captureMenuSlot(double x, double y) {
-        // 原版抓取只记录来源，Shift 才直接选择随身自动目标；页面专有槽交给原版。
+        // 原版抓取只记录来源，按着打开背包键才直接选择随身自动目标；页面专有槽交给原版。
         Slot pressed = host.stationSlotAt(x, y);
         if (pressed != null && pressed.hasItem()
                 && screen.getMenu().getCarried().isEmpty()) {
@@ -363,12 +364,17 @@ public final class StationPanel implements WornPreview.EquipmentActions {
             if (source == null) {
                 return false;
             }
+            boolean quickMove = volume.quickMoveHeld();
+            if (selection == null && !quickMove && Minecraft.getInstance().hasShiftDown()) {
+                // Shift+左键是原版的快速移动：这一下不记来源，整个留给原版页面处理。
+                return false;
+            }
             if (selection == null) {
                 orientation = 0;
                 selection = DragTransfer.newBuilder()
                         .setSlot(source)
                         .build();
-                if (Minecraft.getInstance().hasShiftDown()) {
+                if (quickMove) {
                     submit(selection.toBuilder().setBag(automatic(Volumes.CARRIED)));
                 }
             }
@@ -411,13 +417,13 @@ public final class StationPanel implements WornPreview.EquipmentActions {
     }
 
     private void selectBody(int slot) {
-        // 身体部位只记录来源，Shift 直接选择随身自动目标。
+        // 身体部位只记录来源，按着打开背包键直接选择随身自动目标。
         orientation = 0;
         var source = bodySlot(slot);
         selection = DragTransfer.newBuilder()
                 .setBody(source)
                 .build();
-        if (Minecraft.getInstance().hasShiftDown()) {
+        if (volume.quickMoveHeld()) {
             submit(selection.toBuilder().setBag(automatic(Volumes.CARRIED)));
         }
     }
@@ -486,7 +492,7 @@ public final class StationPanel implements WornPreview.EquipmentActions {
                     .findFirst()
                     .orElseThrow()
                     .getOrientation();
-            if (Minecraft.getInstance().hasShiftDown()) {
+            if (volume.quickMoveHeld()) {
                 submit(selection.toBuilder().setPlayerInventory(true /* playerInventory */));
             }
         }

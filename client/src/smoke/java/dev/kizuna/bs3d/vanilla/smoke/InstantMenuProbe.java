@@ -16,15 +16,31 @@ import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.world.inventory.Slot;
+import org.lwjgl.glfw.GLFW;
 
 /** 用真实按键状态和页面输入覆盖双向快捷搬运及合盖模型落点。 */
 final class InstantMenuProbe {
     private static final int SETTLE_TICKS = 30;
+    /** 原版的快速移动要服务端回一趟才落定，等这么多 tick 再看结果。 */
+    private static final int QUICK_SETTLE_TICKS = 10;
     private static final int SLOT_CENTER_PIXELS = 8;
     private static final long INITIAL_REVISION = 4;
     private static final float MODEL_SEARCH_DEGREES = 15;
-    /** 合成的左键输入不带修饰键；Shift 由 SmokeShift 设置真实按键状态。 */
+    /** 合成的左键输入不带修饰键；打开背包键由 SmokeKey 设置真实按键状态。 */
     private static final MouseButtonInfo LEFT = new MouseButtonInfo(0, 0);
+    /** 原版页面从鼠标事件上读 Shift：按着真实 Shift 的同时，事件上也带这个修饰位。 */
+    private static final MouseButtonInfo SHIFT_LEFT = new MouseButtonInfo(0, GLFW.GLFW_MOD_SHIFT);
+    /** 快捷搬运一段在总步骤里占的位置：从第 4 步进来，走完跳到第 8 步收尾。 */
+    private static final int QUICK_FIRST_STEP = 4;
+    private static final int QUICK_LAST_STEP = 8;
+
+    /** 快捷搬运一段的小步，按顺序走；条件不满足就留在原地等下一个 tick。 */
+    private enum Quick {
+        TAKE_DOWN, TAKE_CLICK, TAKE_RESULT, SHIFT_TO_CHEST, SHIFT_IN_CHEST, SHIFT_BACK, STORE_DOWN, STORE_CLICK,
+        STORE_RESULT, REOPEN
+    }
+
+    private Quick quick = Quick.TAKE_DOWN;
     private int step;
     private int ticks;
     private ByteString moved;
@@ -38,22 +54,24 @@ final class InstantMenuProbe {
         ticks++;
         try {
             boolean done;
-            if (step < 4) {
+            if (step < QUICK_FIRST_STEP) {
                 done = dragSteps(client, screen, bag);
-            } else if (step > 8) {
+            } else if (step > QUICK_LAST_STEP) {
                 done = groundSteps(client, screen);
             } else {
-                done = shiftSteps(client, screen, bag);
+                done = quickMoveSteps(client, screen, bag);
             }
             if (done) {
                 step++;
                 ticks = 0;
             }
             return step > 13;
-        } finally {
-            if (step > 7) {
-                SmokeShift.release();
-            }
+        } catch (RuntimeException failure) {
+            // 失败时不把按着的键留在 Xvfb 里。
+            SmokeKey.SHIFT.release();
+            SmokeKey.OPEN_BACKPACK.release();
+            SmokeRecorder.stop();
+            throw failure;
         }
     }
 
@@ -103,50 +121,115 @@ final class InstantMenuProbe {
         return true;
     }
 
-    private boolean shiftSteps(Minecraft client, AbstractContainerScreen<?> screen, String bag) {
-        // Xvfb 下按住真实 Shift，再通过 Screen 的鼠标入口触发快捷搬运。
-        var addon = VanillaClient.instance();
-        switch (step) {
-            case 4 -> {
+    private boolean quickMoveSteps(Minecraft client, AbstractContainerScreen<?> screen, String bag) {
+        // Xvfb 下按住真实的键，再通过 Screen 的鼠标入口点物品。整段走完返回 true。
+        var volume = VanillaClient.instance().volume();
+        long revision = volume.state().getRevision();
+        Quick before = quick;
+        if (ticks < SmokeRecorder.stepTicks()) {
+            return false;
+        }
+        switch (quick) {
+            case TAKE_DOWN -> {
                 if (ticks < SETTLE_TICKS) {
                     return false;
                 }
-                SmokeShift.press();
+                SmokeRecorder.start("vanilla-quick-move", client.getWindow().getWidth(), client.getWindow().getHeight());
+                SmokeKey.OPEN_BACKPACK.press();
+                quick = Quick.TAKE_CLICK;
             }
-            case 5 -> {
-                if (!Minecraft.getInstance().hasShiftDown()) {
+            case TAKE_CLICK -> {
+                // 按着打开背包键点内景物品：取回原版背包。
+                if (!volume.openKeyDown()) {
                     return false;
                 }
                 click(screen, itemPoint(screen, bag));
-                SmokeShift.release();
+                SmokeKey.OPEN_BACKPACK.release();
+                quick = Quick.TAKE_RESULT;
             }
-            case 6 -> {
-                if (addon.volume().state().getRevision() != INITIAL_REVISION + 3) {
+            case TAKE_RESULT -> {
+                if (revision != INITIAL_REVISION + 3 || volume.openKeyDown()) {
                     return false;
                 }
-                SmokeShift.press();
+                require(client.gui.screen() == screen, "按着打开背包键取物以后原版页面不该关");
+                SmokeKey.SHIFT.press();
+                quick = Quick.SHIFT_TO_CHEST;
             }
-            case 7 -> {
-                if (!Minecraft.getInstance().hasShiftDown()) {
+            case SHIFT_TO_CHEST -> {
+                // Shift+左键归原版：点玩家背包里的那件，原版把它挪进箱子，背包附属不接手。
+                if (!client.hasShiftDown()) {
                     return false;
                 }
-                Slot source = screen.getMenu().slots.stream()
-                        .filter(slot -> slot.container == client.player.getInventory())
-                        .filter(slot -> StackCodec.fingerprint(slot.getItem(), Minecraft.getInstance().player.registryAccess()).equals(moved))
-                        .findFirst().orElseThrow();
-                click(screen, slotPoint(screen, source));
-                SmokeShift.release();
+                shiftClick(screen, slotPoint(screen, slotHolding(client, screen, true /* inPlayerInventory */)));
+                quick = Quick.SHIFT_IN_CHEST;
             }
-            case 8 -> {
-                if (addon.volume().state().getRevision() != INITIAL_REVISION + 4) {
+            case SHIFT_IN_CHEST -> {
+                if (ticks < QUICK_SETTLE_TICKS) {
                     return false;
                 }
+                require(revision == INITIAL_REVISION + 3, "Shift+左键点原版槽位仍然触发了背包的快捷存入");
+                // 再 Shift+左键点箱子里的它，原版挪回玩家背包。
+                shiftClick(screen, slotPoint(screen, slotHolding(client, screen, false /* inPlayerInventory */)));
+                quick = Quick.SHIFT_BACK;
+            }
+            case SHIFT_BACK -> {
+                if (ticks < QUICK_SETTLE_TICKS) {
+                    return false;
+                }
+                slotHolding(client, screen, true /* inPlayerInventory */);
+                require(revision == INITIAL_REVISION + 3, "Shift+左键点箱子槽位不该动背包里的东西");
+                SmokeKey.SHIFT.release();
+                quick = Quick.STORE_DOWN;
+            }
+            case STORE_DOWN -> {
+                if (client.hasShiftDown()) {
+                    return false;
+                }
+                SmokeKey.OPEN_BACKPACK.press();
+                quick = Quick.STORE_CLICK;
+            }
+            case STORE_CLICK -> {
+                // 按着打开背包键点原版槽位：存进随身容器。键先不松，看页面会不会被关掉。
+                if (!volume.openKeyDown()) {
+                    return false;
+                }
+                click(screen, slotPoint(screen, slotHolding(client, screen, true /* inPlayerInventory */)));
+                quick = Quick.STORE_RESULT;
+            }
+            case STORE_RESULT -> {
+                if (revision != INITIAL_REVISION + 4) {
+                    return false;
+                }
+                require(client.gui.screen() == screen, "按着打开背包键存物时原版页面被关掉了");
+                SmokeKey.OPEN_BACKPACK.release();
+                quick = Quick.REOPEN;
+            }
+            case REOPEN -> {
+                if (volume.openKeyDown() || ticks < QUICK_SETTLE_TICKS) {
+                    return false;
+                }
+                SmokeRecorder.stop();
                 screen.onClose();
                 client.gui.setScreen(new InventoryScreen(client.player));
+                step = QUICK_LAST_STEP;
+                return true;
             }
-            default -> throw new IllegalStateException("未知快捷搬运验收步骤");
         }
-        return true;
+        if (quick != before) {
+            ticks = 0;
+            SmokeRecorder.mark(quick.name());
+        }
+        return false;
+    }
+
+    private Slot slotHolding(Minecraft client, AbstractContainerScreen<?> screen, boolean inPlayerInventory) {
+        // 找到装着那件搬来搬去的物品的页面槽：在玩家背包里，或者在箱子里。
+        return screen.getMenu().slots.stream()
+                .filter(slot -> (slot.container == client.player.getInventory()) == inPlayerInventory)
+                .filter(slot -> StackCodec.fingerprint(slot.getItem(), client.player.registryAccess()).equals(moved))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        inPlayerInventory ? "那件物品不在玩家背包里" : "那件物品不在箱子里"));
     }
 
     private boolean groundSteps(Minecraft client, AbstractContainerScreen<?> screen) {
@@ -255,6 +338,19 @@ final class InstantMenuProbe {
         var host = (StationHost) screen;
         return new int[] {host.stationLeft() + slot.x + SLOT_CENTER_PIXELS,
                 host.stationTop() + slot.y + SLOT_CENTER_PIXELS};
+    }
+
+    private static void shiftClick(AbstractContainerScreen<?> screen, int[] point) {
+        // 带 Shift 修饰位的一次完整点击。
+        var event = new MouseButtonEvent(point[0], point[1], SHIFT_LEFT);
+        screen.mouseClicked(event, false /* doubleClick */);
+        screen.mouseReleased(event);
+    }
+
+    private static void require(boolean condition, String detail) {
+        if (!condition) {
+            throw new IllegalStateException(detail);
+        }
     }
 
     private static void click(AbstractContainerScreen<?> screen, int[] point) {

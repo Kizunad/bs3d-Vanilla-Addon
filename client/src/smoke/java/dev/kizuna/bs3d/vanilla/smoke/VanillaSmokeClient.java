@@ -484,7 +484,7 @@ public final class VanillaSmokeClient implements ClientModInitializer {
                             client,
                             "dedicated: model drag, vanilla craft consumption, offhand, instant"
                                     + " reject/instant-commit, replay, forged menu/cursor/slot/fields"
-                                    + " rejection, furnace, chest, closed-model, shift-both-directions,"
+                                    + " rejection, furnace, chest, closed-model, open-key-quick-move-both-directions, vanilla-shift-click,"
                                     + " E page, ground passed");
                 }
             }
