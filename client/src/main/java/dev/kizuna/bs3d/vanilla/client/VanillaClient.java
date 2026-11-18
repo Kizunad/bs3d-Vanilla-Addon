@@ -11,6 +11,8 @@ import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.SubscribeRequest;
 import dev.kizuna.inventoryui.client.ClientBindings;
 import dev.kizuna.inventoryui.client.ClientModule;
 import dev.kizuna.inventoryui.client.ClientRuntime;
+import dev.kizuna.inventoryui.client.status.StatusBlockers;
+import dev.kizuna.inventoryui.client.status.StatusLayout.Area;
 import dev.kizuna.inventoryui.protocol.UiMessageRouter;
 import dev.kizuna.inventoryui.protocol.UiWire;
 import dev.kizuna.inventoryui.registry.FrameworkCatalog;
@@ -18,7 +20,9 @@ import dev.kizuna.inventoryui.registry.FrameworkCatalog;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -74,6 +78,7 @@ public final class VanillaClient implements ClientModule {
     public void register(ClientBindings bindings) {
         // 取 Fabric 已创建的 BS3D 实例，不能 new 第二份模块、快照或模型注册表。
         instance = this;
+        StatusBlockers.register(VanillaClient::statusBlockers);
         volume =
                 FabricLoader.getInstance()
                         .getEntrypoints("kizuna_inventory_ui", ClientModule.class)
@@ -101,6 +106,18 @@ public final class VanillaClient implements ClientModule {
                 UiMessageRouter.Direction.SERVER_TO_CLIENT,
                 this::accept);
 
+    }
+
+    private static List<Area> statusBlockers(Screen screen) {
+        // 只查询当前页面已有的面板，不为未接入的页面创建场景。
+        if (!(screen instanceof StationHost host)) {
+            return List.of();
+        }
+        StationPanel panel = host.stationPanel();
+        if (panel == null) {
+            return List.of();
+        }
+        return panel.statusBlockers();
     }
 
     private static <T extends Message> void bind(

@@ -21,10 +21,13 @@ import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.PlayerSlot;
 import dev.kizuna.bs3d.vanilla.protocol.pb.VanillaProtocol.OpenSceneRequest;
 import dev.kizuna.bs3d.vanilla.client.mixin.RecipeBookScreenAccess;
 import dev.kizuna.inventoryui.client.InventoryUiClient;
+import dev.kizuna.inventoryui.client.status.StatusLayout.Area;
 import dev.kizuna.inventoryui.theme.ThemeTokens;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
@@ -32,6 +35,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
@@ -100,6 +104,39 @@ public final class StationPanel implements WornPreview.EquipmentActions {
             return false;
         }
         return addon.ready(screen) && layout().visible();
+    }
+
+    public List<Area> statusBlockers() {
+        // 原版布局不占位；空的右侧场景仍可放图标，打开容器后才让出整块内景和底边反馈。
+        if (!enabled()) {
+            return List.of();
+        }
+        List<Area> blocked = new ArrayList<>();
+        blocked.add(infoButtonArea());
+        if (help) {
+            Rect playerArea = layout().player();
+            var font = Minecraft.getInstance().font;
+            int height = helpLines(playerArea.width()).size() * (font.lineHeight + GAP_PIXELS) + GAP_PIXELS * 2;
+            blocked.add(new Area(playerArea.x(), playerArea.y(), playerArea.width(), height));
+        }
+        if (!active.isEmpty() && findContainer(active) != null) {
+            blocked.add(interiorArea());
+        }
+        return List.copyOf(blocked);
+    }
+
+    public Area infoButtonArea() {
+        // 点击范围一直延伸到右边缘；圆形绘制的最下方可能比标题栏多一像素。
+        int width = BUTTON_PIXELS + StationLayout.MARGIN_PIXELS;
+        int paintedHeight = GAP_PIXELS + INFO_RADIUS_PIXELS * 2 + 1;
+        int height = Math.max(StationLayout.HEADER_PIXELS, paintedHeight);
+        return new Area(screen.width - width, 0, width, height);
+    }
+
+    public Area interiorArea() {
+        // 标题、可见层范围条、内景和操作反馈都画在布局给出的同一块区域里。
+        Rect area = layout().interior();
+        return new Area(area.x(), area.y(), area.width(), area.height());
     }
 
     public void draw(GuiGraphicsExtractor context, int mx, int my) {
@@ -281,15 +318,7 @@ public final class StationPanel implements WornPreview.EquipmentActions {
                 false);
         if (help) {
             Rect area = layout.player();
-            var lines =
-                    font.split(
-                            Component.literal(
-                                    "装备拖到人物即可穿戴；右键人物选择脱掉装备。\n"
-                                            + "双手、盔甲和内景物品可拖到原版槽位；反向拖动可存回。\n"
-                                            + "拖动空白处旋转，滚轮缩放内景。R/T 旋转待存物品，范围条选择可见层。\n"
-                                            + "按住 " + volume.openKeyName() + " 点物品双向快捷搬运；Shift 点击照原版；\n"
-                                            + "拖到容器模型自动放入；ESC 关闭。"),
-                            area.width());
+            var lines = helpLines(area.width());
             int bottom = area.y() + lines.size() * (font.lineHeight + GAP_PIXELS) + GAP_PIXELS * 2;
             context.fill(
                     area.x(), area.y(), area.right(), bottom, color(ThemeTokens.HUD_BACKGROUND));
@@ -300,6 +329,18 @@ public final class StationPanel implements WornPreview.EquipmentActions {
                 y += font.lineHeight + GAP_PIXELS;
             }
         }
+    }
+
+    private List<FormattedCharSequence> helpLines(int width) {
+        // 说明绘制和占位测量共用同一次折行规则，按键名称与窗口宽度变化时保持一致。
+        return Minecraft.getInstance().font.split(
+                Component.literal(
+                        "装备拖到人物即可穿戴；右键人物选择脱掉装备。\n"
+                                + "双手、盔甲和内景物品可拖到原版槽位；反向拖动可存回。\n"
+                                + "拖动空白处旋转，滚轮缩放内景。R/T 旋转待存物品，范围条选择可见层。\n"
+                                + "按住 " + volume.openKeyName() + " 点物品双向快捷搬运；Shift 点击照原版；\n"
+                                + "拖到容器模型自动放入；ESC 关闭。"),
+                width);
     }
 
     public boolean press(double x, double y, int button) {
